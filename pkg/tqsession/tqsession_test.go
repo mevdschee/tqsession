@@ -491,3 +491,176 @@ func TestLargeValue(t *testing.T) {
 		t.Errorf("Expected 10240 bytes, got %d", len(retrieved))
 	}
 }
+
+func TestPersistence(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "tqsession_persistence_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	config := DefaultConfig()
+	config.DataDir = tmpDir
+	config.SyncStrategy = SyncNone
+
+	// Phase 1: Create cache, write items
+	c, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Write some items
+	c.Set("key1", []byte("value1"), 0)
+	c.Set("key2", []byte("value2"), 0)
+	c.Set("key3", []byte("value3"), 0)
+
+	// Force sync to ensure data is on disk
+	c.storage.Sync()
+
+	// Close the cache
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Phase 2: Reopen cache and verify data persisted
+	c2, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c2.Close()
+
+	// Verify all items exist
+	val, _, err := c2.Get("key1")
+	if err != nil {
+		t.Errorf("key1 should exist after restart: %v", err)
+	} else if string(val) != "value1" {
+		t.Errorf("key1 value mismatch: expected 'value1', got '%s'", val)
+	}
+
+	val, _, err = c2.Get("key2")
+	if err != nil {
+		t.Errorf("key2 should exist after restart: %v", err)
+	} else if string(val) != "value2" {
+		t.Errorf("key2 value mismatch: expected 'value2', got '%s'", val)
+	}
+
+	val, _, err = c2.Get("key3")
+	if err != nil {
+		t.Errorf("key3 should exist after restart: %v", err)
+	} else if string(val) != "value3" {
+		t.Errorf("key3 value mismatch: expected 'value3', got '%s'", val)
+	}
+
+	t.Log("Persistence test passed: data survives restart")
+}
+
+func TestMultipleKeys(t *testing.T) {
+	c, cleanup := setupTestCache(t)
+	defer cleanup()
+
+	// Write 100 items
+	for i := 0; i < 100; i++ {
+		key := "key" + string(rune('0'+i/10)) + string(rune('0'+i%10))
+		value := []byte("value" + key)
+		if _, err := c.Set(key, value, 0); err != nil {
+			t.Fatalf("Set failed for %s: %v", key, err)
+		}
+	}
+
+	// Verify all items exist
+	for i := 0; i < 100; i++ {
+		key := "key" + string(rune('0'+i/10)) + string(rune('0'+i%10))
+		expected := "value" + key
+		val, _, err := c.Get(key)
+		if err != nil {
+			t.Errorf("Get failed for %s: %v", key, err)
+			continue
+		}
+		if string(val) != expected {
+			t.Errorf("Value mismatch for %s: expected '%s', got '%s'", key, expected, val)
+		}
+	}
+
+	// Verify stats
+	stats := c.Stats()
+	if stats["curr_items"] != "100" {
+		t.Errorf("Expected 100 items, got %s", stats["curr_items"])
+	}
+}
+
+func TestBucketSelection(t *testing.T) {
+	c, cleanup := setupTestCache(t)
+	defer cleanup()
+
+	// Test values of different sizes to ensure bucket selection works
+	testCases := []struct {
+		name   string
+		size   int
+		bucket int // expected bucket (0=1KB, 1=2KB, 2=4KB, etc.)
+	}{
+		{"tiny", 100, 0},   // < 1KB → bucket 0
+		{"1KB", 1024, 0},   // = 1KB → bucket 0
+		{"1.5KB", 1536, 1}, // > 1KB → bucket 1 (2KB)
+		{"4KB", 4096, 2},   // = 4KB → bucket 2
+		{"10KB", 10240, 4}, // > 8KB → bucket 4 (16KB)
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			value := make([]byte, tc.size)
+			for i := range value {
+				value[i] = byte(i % 256)
+			}
+
+			key := "key_" + tc.name
+			if _, err := c.Set(key, value, 0); err != nil {
+				t.Fatalf("Set failed for %s: %v", key, err)
+			}
+
+			retrieved, _, err := c.Get(key)
+			if err != nil {
+				t.Fatalf("Get failed for %s: %v", key, err)
+			}
+
+			if len(retrieved) != tc.size {
+				t.Errorf("Size mismatch for %s: expected %d, got %d", key, tc.size, len(retrieved))
+			}
+
+			// Verify data integrity
+			for i := 0; i < tc.size; i++ {
+				if retrieved[i] != byte(i%256) {
+					t.Errorf("Data corruption in %s at byte %d", key, i)
+					break
+				}
+			}
+		})
+	}
+}
+
+func TestOverwrite(t *testing.T) {
+	c, cleanup := setupTestCache(t)
+	defer cleanup()
+
+	// Set initial value
+	cas1, _ := c.Set("overwrite_key", []byte("initial"), 0)
+
+	// Overwrite with new value
+	cas2, _ := c.Set("overwrite_key", []byte("updated"), 0)
+
+	// CAS should change
+	if cas1 == cas2 {
+		t.Error("CAS should change on overwrite")
+	}
+
+	// Value should be updated
+	val, _, _ := c.Get("overwrite_key")
+	if string(val) != "updated" {
+		t.Errorf("Expected 'updated', got '%s'", val)
+	}
+
+	// Stats should show only 1 item
+	stats := c.Stats()
+	if stats["curr_items"] != "1" {
+		t.Errorf("Expected 1 item after overwrite, got %s", stats["curr_items"])
+	}
+}

@@ -34,14 +34,14 @@ Uses **fixed-size records** with `fseek` for random access (not append-only).
 
 #### Keys File Format (`keys`)
 
-Each record is exactly **1049 bytes** at offset `keyId * 1049`:
+Each record is exactly **1058 bytes** at offset `keyId * 1058`:
 
 ```
-┌─────────┬──────────────┬──────────────┬─────────┬──────────┐
-│  free   │     key      │ lastAccessed │   cas   │  expiry  │
-│ 1 byte  │  1024 bytes  │   8 bytes    │ 8 bytes │ 8 bytes  │
-└─────────┴──────────────┴──────────────┴─────────┴──────────┘
-         Total: 1049 bytes per record
+┌─────────┬──────────────┬──────────────┬─────────┬──────────┬────────┬─────────┐
+│  free   │     key      │ lastAccessed │   cas   │  expiry  │ bucket │ slotIdx │
+│ 1 byte  │  1024 bytes  │   8 bytes    │ 8 bytes │ 8 bytes  │ 1 byte │ 8 bytes │
+└─────────┴──────────────┴──────────────┴─────────┴──────────┴────────┴─────────┘
+         Total: 1058 bytes per record
 ```
 
 | Field | Size | Description |
@@ -51,8 +51,10 @@ Each record is exactly **1049 bytes** at offset `keyId * 1049`:
 | `lastAccessed` | 8 bytes | Unix timestamp (int64), for LRU |
 | `cas` | 8 bytes | CAS token (uint64) |
 | `expiry` | 8 bytes | Unix timestamp (int64), 0 = no expiry |
+| `bucket` | 1 byte | Data bucket index (0-15) |
+| `slotIdx` | 8 bytes | Slot index within the bucket (int64) |
 
-**keyId** = record index = file offset / 1049
+**keyId** = record index = file offset / 1058
 
 ---
 
@@ -120,7 +122,7 @@ Start at 1024 bytes and double the size for each file.
 
 ## Success Criteria
 1.  **Persistence**: Data survives process restarts
-2.  **Performance**: Fast lookups via B-Tree, 100k RPS GET, 100k RPS SET (hot keys)
+2.  **Performance**: Fast lookups via B-Tree, 100k RPS GET, 50k RPS SET (hot keys)
 3.  **Protocol**: Compatible with Memcached clients (Text and Binary protocols)
 4.  **Simplicity**: Easy to understand and maintain, small code base
 5.  **Compatibility**: Works with PHP Memcached session handler

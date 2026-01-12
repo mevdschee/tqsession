@@ -116,22 +116,19 @@ func (w *Worker) recover() error {
 		// Skip expired entries
 		if rec.Expiry > 0 && rec.Expiry <= now {
 			w.freeLists.PushKey(keyId)
-			// TODO: Also free the data slot
+			w.freeLists.PushData(int(rec.Bucket), rec.SlotIdx)
 			continue
 		}
 
-		// We need to find the data location - for now we store it with keyId
-		// In a real implementation, we'd need to track bucket/slotIdx in the key record
-		// For simplicity, we'll use a convention: bucket and slotIdx are derived
-		// This is a simplification - in practice we'd store this in the key record
-
+		// Use bucket/slotIdx from the persisted record
 		entry := &IndexEntry{
 			Key:          key,
 			KeyId:        keyId,
+			Bucket:       int(rec.Bucket),
+			SlotIdx:      rec.SlotIdx,
 			Expiry:       rec.Expiry,
 			Cas:          rec.Cas,
 			LastAccessed: rec.LastAccessed,
-			// Bucket and SlotIdx would need to be stored somewhere
 		}
 		w.index.Set(entry)
 	}
@@ -335,12 +332,14 @@ func (w *Worker) doSet(key string, value []byte, ttl time.Duration, existingCas 
 	// Generate new CAS
 	cas := uint64(now.UnixNano())
 
-	// Write key record
+	// Write key record (including bucket/slotIdx for recovery)
 	keyRec := &KeyRecord{
 		Free:         FlagInUse,
 		LastAccessed: now.Unix(),
 		Cas:          cas,
 		Expiry:       expiry,
+		Bucket:       byte(bucket),
+		SlotIdx:      slotIdx,
 	}
 	copy(keyRec.Key[:], key)
 	if err := w.storage.WriteKeyRecord(keyId, keyRec); err != nil {
