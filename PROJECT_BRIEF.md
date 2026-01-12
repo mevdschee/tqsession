@@ -69,19 +69,18 @@ Create 16 data files each holding a different size bucket.
 Start at 1024 bytes and double the size for each file.
 
 ```
-┌─────────┬──────────┬─────────────────────┐
-│  free   │  length  │        data         │
-│ 1 byte  │ 4 bytes  │   [length] bytes    │
-└─────────┴──────────┴─────────────────────┘
+┌──────────┬─────────────────────┐
+│  length  │        data         │
+│ 4 bytes  │   [length] bytes    │
+└──────────┴─────────────────────┘
 ```
 
 | Field          | Size    | Description                            |
 |----------------|---------|----------------------------------------|
-| `free`         | 1 byte  | `0x00` = in use, `0x01` = deleted/free |
 | `length`       | 4 bytes | Data length (uint32), max bucket size  |
 | `data`         | bucket size | Raw value bytes                    |
 
-**Slot sizes**: Total slot = `5 + bucket_size` bytes. Buckets: 1KB, 2KB, ..., 64MB.
+**Slot sizes**: Total slot = `4 + bucket_size` bytes. Buckets: 1KB, 2KB, ..., 64MB.
 
 ---
 
@@ -115,15 +114,19 @@ Start at 1024 bytes and double the size for each file.
 - **On update**: Move node to head, update `lastAccessed` in keys file via fseek
 - **On eviction**: Remove from tail, mark records as free
 
-#### 4. In-Memory Free Lists (O(1) Allocation)
+#### 4. Continuous Defragmentation (Always Compact Files)
 
-| File | Free List Structure    | Allocation Strategy                         |
-|------|------------------------|---------------------------------------------|
-| `keys` | Stack of free keyIds | Pop from stack (any slot works, fixed size) |
-| `data` | Size-bucketed lists  | Best-fit from smallest sufficient bucket    |
+Instead of free lists, uses **continuous defragmentation**:
 
-**On delete**: Push freed slot onto appropriate free list  
-**On insert**: Pop from free list, or append to file if empty
+**On delete/eviction**:
+1. Move tail slot data to freed slot position
+2. Update the moved entry's index to point to new slot
+3. Truncate file by one slot
+
+**Benefits**:
+- Files are always compact, no wasted space
+- O(1) allocation (always append to end)
+- No fragmentation over time
 
 ## Success Criteria
 1.  **Persistence**: Data survives process restarts

@@ -227,16 +227,22 @@ type Index struct {
 	btree      *btree.BTree
 	expiryHeap *ExpiryHeap
 	lruList    *LRUList
-	keyIdMap   map[int64]string // keyId → key for reverse lookup
+	keyIdMap   map[int64]string         // keyId → key for reverse lookup
+	slotIndex  map[int]map[int64]string // bucket → slotIdx → key for defrag
 }
 
 func NewIndex() *Index {
-	return &Index{
+	idx := &Index{
 		btree:      btree.New(32), // degree 32 for good performance
 		expiryHeap: NewExpiryHeap(),
 		lruList:    NewLRUList(),
 		keyIdMap:   make(map[int64]string),
+		slotIndex:  make(map[int]map[int64]string),
 	}
+	for i := 0; i < NumBuckets; i++ {
+		idx.slotIndex[i] = make(map[int64]string)
+	}
+	return idx
 }
 
 // Get retrieves an entry by key
@@ -251,8 +257,16 @@ func (idx *Index) Get(key string) (*IndexEntry, bool) {
 
 // Set inserts or updates an entry
 func (idx *Index) Set(entry *IndexEntry) {
+	// Remove old slot index entry if bucket/slot changed
+	if oldEntry, ok := idx.Get(entry.Key); ok {
+		if oldEntry.Bucket != entry.Bucket || oldEntry.SlotIdx != entry.SlotIdx {
+			delete(idx.slotIndex[oldEntry.Bucket], oldEntry.SlotIdx)
+		}
+	}
+
 	idx.btree.ReplaceOrInsert(*entry)
 	idx.keyIdMap[entry.KeyId] = entry.Key
+	idx.slotIndex[entry.Bucket][entry.SlotIdx] = entry.Key
 
 	// Update expiry heap
 	if entry.Expiry > 0 {
@@ -277,6 +291,7 @@ func (idx *Index) Delete(key string) *IndexEntry {
 	}
 	entry := item.(IndexEntry)
 	delete(idx.keyIdMap, entry.KeyId)
+	delete(idx.slotIndex[entry.Bucket], entry.SlotIdx)
 	idx.expiryHeap.Remove(entry.KeyId)
 	idx.lruList.Remove(entry.KeyId)
 	return &entry
@@ -317,4 +332,50 @@ func (idx *Index) GetExpired(now int64) []*ExpiryEntry {
 // PopLRU removes and returns the least recently used entry's keyId
 func (idx *Index) PopLRU() *LRUNode {
 	return idx.lruList.PopTail()
+}
+
+// GetByBucketSlot retrieves an entry by bucket and slot index
+func (idx *Index) GetByBucketSlot(bucket int, slotIdx int64) *IndexEntry {
+	key, ok := idx.slotIndex[bucket][slotIdx]
+	if !ok {
+		return nil
+	}
+	entry, _ := idx.Get(key)
+	return entry
+}
+
+// UpdateSlotIdx updates the slot index for an entry (used during defrag)
+func (idx *Index) UpdateSlotIdx(entry *IndexEntry, newSlotIdx int64) {
+	// Remove old slot index
+	delete(idx.slotIndex[entry.Bucket], entry.SlotIdx)
+	// Update entry
+	entry.SlotIdx = newSlotIdx
+	// Add new slot index
+	idx.slotIndex[entry.Bucket][newSlotIdx] = entry.Key
+	// Update btree
+	idx.btree.ReplaceOrInsert(*entry)
+}
+
+// UpdateKeyId updates the keyId for an entry (used during key file defrag)
+func (idx *Index) UpdateKeyId(entry *IndexEntry, newKeyId int64) {
+	// Remove old keyId mapping
+	delete(idx.keyIdMap, entry.KeyId)
+	// Update LRU list node
+	if node, ok := idx.lruList.nodeMap[entry.KeyId]; ok {
+		delete(idx.lruList.nodeMap, entry.KeyId)
+		node.KeyId = newKeyId
+		idx.lruList.nodeMap[newKeyId] = node
+	}
+	// Update expiry heap
+	if heapIdx, ok := idx.expiryHeap.keyIndex[entry.KeyId]; ok {
+		delete(idx.expiryHeap.keyIndex, entry.KeyId)
+		idx.expiryHeap.entries[heapIdx].KeyId = newKeyId
+		idx.expiryHeap.keyIndex[newKeyId] = heapIdx
+	}
+	// Update entry
+	entry.KeyId = newKeyId
+	// Add new keyId mapping
+	idx.keyIdMap[newKeyId] = entry.Key
+	// Update btree
+	idx.btree.ReplaceOrInsert(*entry)
 }

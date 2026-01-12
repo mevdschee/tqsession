@@ -308,9 +308,19 @@ func (w *Worker) doSet(key string, value []byte, ttl time.Duration, existingCas 
 		if checkCas && existing.Cas != existingCas {
 			return &Response{Err: ErrCasMismatch}
 		}
-		// Free old data slot
-		w.storage.MarkDataFree(existing.Bucket, existing.SlotIdx)
-		w.freeLists.PushData(existing.Bucket, existing.SlotIdx)
+	}
+
+	// Update live data size early and trigger LRU eviction BEFORE allocating slots
+	// This ensures eviction doesn't truncate the slot we're about to use
+	w.liveDataSize += int64(len(value))
+	if exists {
+		w.liveDataSize -= int64(existing.Length)
+	}
+	w.lruEvict()
+
+	// Now compact old data slot if bucket changed (after eviction is done)
+	if exists && existing.Bucket != bucket {
+		w.compactDataSlot(existing.Bucket, existing.SlotIdx)
 	}
 
 	// Allocate key slot
@@ -325,9 +335,13 @@ func (w *Worker) doSet(key string, value []byte, ttl time.Duration, existingCas 
 		}
 	}
 
-	// Allocate data slot
-	slotIdx := w.freeLists.PopData(bucket)
-	if slotIdx < 0 {
+	// Allocate data slot - always append (continuous defrag keeps files compact)
+	var slotIdx int64
+	if exists && existing.Bucket == bucket {
+		// Reuse same slot if bucket unchanged
+		slotIdx = existing.SlotIdx
+	} else {
+		// Append to the bucket
 		slotIdx = w.nextSlotId[bucket]
 		w.nextSlotId[bucket]++
 	}
@@ -355,14 +369,10 @@ func (w *Worker) doSet(key string, value []byte, ttl time.Duration, existingCas 
 		return &Response{Err: err}
 	}
 
-	// Update live data size (add new, subtract old if overwriting)
-	w.liveDataSize += int64(len(value))
-	if exists {
-		w.liveDataSize -= int64(existing.Length)
-	}
+	// Live data size was already updated above before allocation
 
-	// Trigger LRU eviction if needed
-	w.lruEvict()
+	// Trigger LRU eviction if needed (already done above, but re-check in case of edge cases)
+	// w.lruEvict() -- moved to before allocation
 
 	// Update index
 	entry := &IndexEntry{
@@ -391,19 +401,92 @@ func (w *Worker) handleDelete(req *Request) *Response {
 }
 
 func (w *Worker) deleteEntry(entry *IndexEntry) {
-	// Mark key record as free
-	w.storage.MarkKeyFree(entry.KeyId)
-	w.freeLists.PushKey(entry.KeyId)
-
-	// Mark data slot as free
-	w.storage.MarkDataFree(entry.Bucket, entry.SlotIdx)
-	w.freeLists.PushData(entry.Bucket, entry.SlotIdx)
+	// Remove from index FIRST (clears slotIndex before compactDataSlot moves another entry there)
+	w.index.Delete(entry.Key)
 
 	// Update live data size
 	w.liveDataSize -= int64(entry.Length)
 
-	// Remove from index
-	w.index.Delete(entry.Key)
+	// Compact data slot: move tail to freed slot and truncate
+	w.compactDataSlot(entry.Bucket, entry.SlotIdx)
+
+	// Compact key slot: move tail to freed slot and truncate
+	w.compactKeySlot(entry.KeyId)
+}
+
+// compactDataSlot moves the tail slot to fill the freed slot, then truncates the file
+func (w *Worker) compactDataSlot(bucket int, freedSlotIdx int64) {
+	tailIdx := w.nextSlotId[bucket] - 1
+	if tailIdx < 0 {
+		return // Empty file
+	}
+
+	if freedSlotIdx == tailIdx {
+		// Already the tail, just decrement and truncate
+		w.nextSlotId[bucket]--
+		w.storage.TruncateDataFile(bucket, w.nextSlotId[bucket])
+		return
+	}
+
+	// Read tail slot data
+	tailData, err := w.storage.ReadDataSlot(bucket, tailIdx)
+	if err != nil {
+		return // Can't read, skip compaction
+	}
+
+	// Write tail data to freed slot
+	if err := w.storage.WriteDataSlot(bucket, freedSlotIdx, tailData); err != nil {
+		return // Can't write, skip compaction
+	}
+
+	// Find and update the entry that points to the tail slot
+	tailEntry := w.index.GetByBucketSlot(bucket, tailIdx)
+	if tailEntry != nil {
+		// Update index and storage to point to new slot
+		w.index.UpdateSlotIdx(tailEntry, freedSlotIdx)
+		w.storage.UpdateSlotIdx(tailEntry.KeyId, freedSlotIdx)
+	}
+
+	// Truncate file
+	w.nextSlotId[bucket]--
+	w.storage.TruncateDataFile(bucket, w.nextSlotId[bucket])
+}
+
+// compactKeySlot moves the tail key record to fill the freed slot, then truncates the file
+func (w *Worker) compactKeySlot(freedKeyId int64) {
+	tailKeyId := w.nextKeyId - 1
+	if tailKeyId < 0 {
+		return // Empty file
+	}
+
+	if freedKeyId == tailKeyId {
+		// Already the tail, just decrement and truncate
+		w.nextKeyId--
+		w.storage.TruncateKeysFile(w.nextKeyId)
+		return
+	}
+
+	// Read tail key record
+	tailRec, err := w.storage.ReadKeyRecord(tailKeyId)
+	if err != nil {
+		return // Can't read, skip compaction
+	}
+
+	// Write tail record to freed slot
+	if err := w.storage.WriteKeyRecord(freedKeyId, tailRec); err != nil {
+		return // Can't write, skip compaction
+	}
+
+	// Find and update the entry that has tailKeyId
+	tailEntry := w.index.GetByKeyId(tailKeyId)
+	if tailEntry != nil {
+		// Update index to point to new keyId
+		w.index.UpdateKeyId(tailEntry, freedKeyId)
+	}
+
+	// Truncate file
+	w.nextKeyId--
+	w.storage.TruncateKeysFile(w.nextKeyId)
 }
 
 func (w *Worker) handleTouch(req *Request) *Response {
@@ -554,19 +637,14 @@ func (w *Worker) doAppendPrepend(key string, value []byte, append bool) *Respons
 		return &Response{Err: err}
 	}
 
-	// Free old slot if bucket changed
+	// Compact old slot and allocate new if bucket changed
 	if newBucket != entry.Bucket {
-		w.storage.MarkDataFree(entry.Bucket, entry.SlotIdx)
-		w.freeLists.PushData(entry.Bucket, entry.SlotIdx)
+		w.compactDataSlot(entry.Bucket, entry.SlotIdx)
 
-		// Allocate new slot
-		slotIdx := w.freeLists.PopData(newBucket)
-		if slotIdx < 0 {
-			slotIdx = w.nextSlotId[newBucket]
-			w.nextSlotId[newBucket]++
-		}
+		// Append to the new bucket
 		entry.Bucket = newBucket
-		entry.SlotIdx = slotIdx
+		entry.SlotIdx = w.nextSlotId[newBucket]
+		w.nextSlotId[newBucket]++
 	}
 
 	// Write new data

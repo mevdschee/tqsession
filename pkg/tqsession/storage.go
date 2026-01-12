@@ -102,7 +102,7 @@ func NewStorage(dataDir string) (*Storage, error) {
 func (s *Storage) Close() error {
 	var firstErr error
 	if s.keysFile != nil {
-		if err := s.keysFile.Close(); err != nil && firstErr == nil {
+		if err := s.keysFile.Close(); err != nil {
 			firstErr = err
 		}
 	}
@@ -288,9 +288,30 @@ func (s *Storage) SlotCount(bucket int) (int64, error) {
 
 // UpdateLastAccessed updates only the lastAccessed field
 func (s *Storage) UpdateLastAccessed(keyId int64, lastAccessed time.Time) error {
-	offset := keyId*KeyRecordSize + 1 + MaxKeySize // Skip free + key
+	offset := keyId*KeyRecordSize + 1 + 2 + MaxKeySize // Skip free + keyLen + key
 	buf := make([]byte, 8)
 	binary.LittleEndian.PutUint64(buf, uint64(lastAccessed.Unix()))
 	_, err := s.keysFile.WriteAt(buf, offset)
 	return err
+}
+
+// UpdateSlotIdx updates only the slotIdx field in a key record
+func (s *Storage) UpdateSlotIdx(keyId int64, slotIdx int64) error {
+	offset := keyId*KeyRecordSize + 1 + 2 + MaxKeySize + 8 + 8 + 8 + 1 // Skip to slotIdx
+	buf := make([]byte, 8)
+	binary.LittleEndian.PutUint64(buf, uint64(slotIdx))
+	_, err := s.keysFile.WriteAt(buf, offset)
+	return err
+}
+
+// TruncateDataFile truncates a data bucket file to the given slot count
+func (s *Storage) TruncateDataFile(bucket int, slotCount int64) error {
+	newSize := slotCount * int64(s.SlotSize(bucket))
+	return s.dataFiles[bucket].Truncate(newSize)
+}
+
+// TruncateKeysFile truncates the keys file to the given key count
+func (s *Storage) TruncateKeysFile(keyCount int64) error {
+	newSize := keyCount * KeyRecordSize
+	return s.keysFile.Truncate(newSize)
 }

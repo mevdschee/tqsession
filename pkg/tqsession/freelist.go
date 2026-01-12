@@ -31,6 +31,11 @@ func (f *FreeList) Len() int {
 	return len(f.slots)
 }
 
+// Clear removes all slots from the free list
+func (f *FreeList) Clear() {
+	f.slots = f.slots[:0]
+}
+
 // FreeLists manages all free lists (keys + 16 data buckets)
 type FreeLists struct {
 	keys *FreeList
@@ -65,4 +70,14 @@ func (f *FreeLists) PushData(bucket int, slotIdx int64) {
 // PopData returns a free data slot for a bucket, or -1 if none
 func (f *FreeLists) PopData(bucket int) int64 {
 	return f.data[bucket].Pop()
+}
+
+// ClearData clears the free list for a data bucket
+func (f *FreeLists) ClearData(bucket int) {
+	f.data[bucket].Clear()
+}
+
+// ClearKey clears the free list for keys
+func (f *FreeLists) ClearKey() {
+	f.keys.Clear()
 }

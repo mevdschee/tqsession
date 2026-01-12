@@ -106,7 +106,7 @@ run_benchmark_set() {
     echo "Starting TQSession (Sync Interval: $SYNC_INTERVAL)..."
     rm -rf /tmp/tqsession-bench
     mkdir -p /tmp/tqsession-bench
-    ./tqsession-server -data-dir=/tmp/tqsession-bench -port=:11221 -sync-interval=$SYNC_INTERVAL > /dev/null 2>&1 &
+    ./tqsession-server -data-dir=/tmp/tqsession-bench -listen=:11221 -sync-interval=$SYNC_INTERVAL > /dev/null 2>&1 &
     TQ_PID=$!
 
     # --- Start Redis ---
