@@ -11,11 +11,11 @@ It implements **both the Memcached text protocol and the Binary Protocol**, ensu
 
 Uses a **single-worker architecture** for storage and sync, with no locks:
 
-| Goroutine | Responsibility |
-|-----------|----------------|
-| **Server** | Accepts client connections, talks to Storage worker |
+| Goroutine   | Responsibility                                          |
+|-------------|---------------------------------------------------------|
+| **Server**  | Accepts client connections, talks to Storage worker     |
 | **Storage** | Handles all file operations (reads/writes) sequentially |
-| **Sync** | Calls `fsync` periodically (interval configurable) |
+| **Sync**    | Calls `fsync` periodically (interval configurable)      |
 
 Operations are sent to the storage worker via channels, eliminating lock contention.
 
@@ -25,10 +25,10 @@ Operations are sent to the storage worker via channels, eliminating lock content
 
 Uses **fixed-size records** with `fseek` for random access (not append-only).
 
-| File | Purpose |
-|------|---------||
+| File   | Purpose                                  |
+|--------|------------------------------------------|
 | `keys` | Fixed-size key records (1049 bytes each) |
-| `data` | Variable-size value records |
+| `data` | Variable-size value records              |
 
 ---
 
@@ -44,16 +44,16 @@ Each record is exactly **1060 bytes** at offset `keyId * 1060`:
          Total: 1060 bytes per record
 ```
 
-| Field | Size | Description |
-|-------|------|-------------|
-| `free` | 1 byte | `0x00` = in use, `0x01` = deleted/free |
-| `keyLen` | 2 bytes | Actual key length (uint16, 0-1024) |
-| `key` | 1024 bytes | Key string, null-padded |
+| Field          | Size    | Description                                      |
+|----------------|---------|--------------------------------------------------|
+| `free`         | 1 byte  | `0x00` = in use, `0x01` = deleted/free |
+| `keyLen`       | 2 bytes | Actual key length (uint16, 0-1024) |
+| `key`          | 1024 bytes | Key string, null-padded |
 | `lastAccessed` | 8 bytes | Unix timestamp (int64), for LRU |
-| `cas` | 8 bytes | CAS token (uint64) |
-| `expiry` | 8 bytes | Unix timestamp in **milliseconds** (int64), 0 = no expiry |
-| `bucket` | 1 byte | Data bucket index (0-15) |
-| `slotIdx` | 8 bytes | Slot index within the bucket (int64) |
+| `cas`          | 8 bytes | CAS token (uint64) |
+| `expiry`       | 8 bytes | Unix timestamp in **milliseconds** (int64), 0 = no expiry |
+| `bucket`       | 1 byte  | Data bucket index (0-15) |
+| `slotIdx`      | 8 bytes | Slot index within the bucket (int64) |
 
 **keyId** = record index = file offset / 1060
 
@@ -71,11 +71,11 @@ Start at 1024 bytes and double the size for each file.
 └─────────┴──────────┴─────────────────────┘
 ```
 
-| Field | Size | Description |
-|-------|------|-------------|
-| `free` | 1 byte | `0x00` = in use, `0x01` = deleted/free |
-| `length` | 4 bytes | Data length (uint32), max bucket size |
-| `data` | bucket size | Raw value bytes |
+| Field          | Size    | Description                            |
+|----------------|---------|----------------------------------------|
+| `free`         | 1 byte  | `0x00` = in use, `0x01` = deleted/free |
+| `length`       | 4 bytes | Data length (uint32), max bucket size  |
+| `data`         | bucket size | Raw value bytes                    |
 
 **Slot sizes**: Total slot = `5 + bucket_size` bytes. Buckets: 1KB, 2KB, ..., 64MB.
 
@@ -94,11 +94,11 @@ Start at 1024 bytes and double the size for each file.
 - **Entries**: `(expiry, keyId)` — pointers into keys file
 
 **Operations**:
-| Operation | Complexity | Description |
-|-----------|------------|-------------|
-| `PeekMin()` | O(1) | Check if root is expired |
-| `PopExpired()` | O(log n) | Remove expired item, reheap |
-| `Insert()` | O(log n) | Add new item with TTL |
+| Operation      | Complexity | Description                     |
+|----------------|------------|---------------------------------|
+| `PeekMin()`    | O(1)       | Check if root is expired        |
+| `PopExpired()` | O(log n)   | Remove expired item, reheap     |
+| `Insert()`     | O(log n)   | Add new item with TTL           |
 | `Remove(keyId)` | O(log n) | Remove by keyId (with index map) |
 
 **Invalidation Flow** (no scanning required):
@@ -113,10 +113,10 @@ Start at 1024 bytes and double the size for each file.
 
 #### 4. In-Memory Free Lists (O(1) Allocation)
 
-| File | Free List Structure | Allocation Strategy |
-|------|--------------------|--------------------|
+| File | Free List Structure    | Allocation Strategy                         |
+|------|------------------------|---------------------------------------------|
 | `keys` | Stack of free keyIds | Pop from stack (any slot works, fixed size) |
-| `data` | Size-bucketed lists | Best-fit from smallest sufficient bucket |
+| `data` | Size-bucketed lists  | Best-fit from smallest sufficient bucket    |
 
 **On delete**: Push freed slot onto appropriate free list  
 **On insert**: Pop from free list, or append to file if empty
