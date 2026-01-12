@@ -414,14 +414,16 @@ func TestExpiry(t *testing.T) {
 	c, cleanup := setupTestCache(t)
 	defer cleanup()
 
-	// Set a key with short TTL (same pattern as TestTouch which passes)
-	cas, setErr := c.Set("expiry_key", []byte("expiry_value"), 500*time.Millisecond)
+	// Set a key with short TTL
+	cas, setErr := c.Set("expiry_key", []byte("expiry_value"), 200*time.Millisecond)
 	if setErr != nil {
 		t.Fatalf("Set failed: %v", setErr)
 	}
-	t.Logf("Set returned cas=%d", cas)
+	if cas == 0 {
+		t.Error("Expected non-zero CAS")
+	}
 
-	// Should be accessible immediately (like TestTouch)
+	// Should be accessible immediately
 	val, _, err := c.Get("expiry_key")
 	if err != nil {
 		t.Fatalf("Key should be accessible immediately: err=%v", err)
@@ -431,7 +433,7 @@ func TestExpiry(t *testing.T) {
 	}
 
 	// Wait for expiry
-	time.Sleep(600 * time.Millisecond)
+	time.Sleep(300 * time.Millisecond)
 
 	// Should be gone due to expiry check in Get
 	_, _, err = c.Get("expiry_key")

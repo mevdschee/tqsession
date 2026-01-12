@@ -3,6 +3,7 @@ package tqsession
 import (
 	"fmt"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -48,6 +49,7 @@ type Cache struct {
 	storage   *Storage
 	worker    *Worker
 	stopSync  chan struct{}
+	wg        sync.WaitGroup
 	StartTime time.Time
 }
 
@@ -77,6 +79,7 @@ func New(cfg Config) (*Cache, error) {
 
 	// Start sync worker if periodic
 	if cfg.SyncStrategy == SyncPeriodic {
+		c.wg.Add(1)
 		go c.runSyncWorker()
 	}
 
@@ -85,6 +88,8 @@ func New(cfg Config) (*Cache, error) {
 
 // runSyncWorker periodically syncs files to disk
 func (c *Cache) runSyncWorker() {
+	defer c.wg.Done()
+
 	ticker := time.NewTicker(c.config.SyncInterval)
 	defer ticker.Stop()
 
@@ -100,10 +105,13 @@ func (c *Cache) runSyncWorker() {
 
 // Close shuts down the cache
 func (c *Cache) Close() error {
+	// Stop worker and wait for it
 	c.worker.Stop()
 
+	// Stop sync worker and wait for it
 	if c.config.SyncStrategy == SyncPeriodic {
 		close(c.stopSync)
+		c.wg.Wait()
 	}
 
 	// Final sync
