@@ -1,0 +1,194 @@
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"log"
+	"math/rand"
+	"net"
+	"os"
+	"runtime/pprof"
+	"sync"
+	"time"
+
+	"github.com/bradfitz/gomemcache/memcache"
+	"github.com/redis/go-redis/v9"
+)
+
+var (
+	host       = flag.String("host", "localhost:11211", "Host to benchmark")
+	protocol   = flag.String("protocol", "memcache", "Protocol to use: memcache or redis")
+	csvOutput  = flag.Bool("csv", false, "Output results in CSV format")
+	label      = flag.String("label", "Target", "Label for the backend (used in CSV)")
+	mode       = flag.String("mode", "default", "Persistence mode label (used in CSV)")
+	clients    = flag.Int("clients", 10, "Number of concurrent clients")
+	requests   = flag.Int("requests", 100000, "Total number of requests")
+	valueSize  = flag.Int("size", 1024, "Value size in bytes")
+	keys       = flag.Int("keys", 10000, "Key space size")
+	cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
+	operation  = flag.String("op", "both", "operation to benchmark: set, get, or both")
+)
+
+// Benchmarker defines the interface for benchmarking different cache backends
+type Benchmarker interface {
+	Set(key string, value []byte) error
+	Get(key string) error
+	Close() error
+}
+
+// MemcacheClient implements Benchmarker for Memcached
+type MemcacheClient struct {
+	client *memcache.Client
+}
+
+func NewMemcacheClient(server string) *MemcacheClient {
+	return &MemcacheClient{
+		client: memcache.New(server),
+	}
+}
+
+func (m *MemcacheClient) Set(key string, value []byte) error {
+	return m.client.Set(&memcache.Item{Key: key, Value: value})
+}
+
+func (m *MemcacheClient) Get(key string) error {
+	_, err := m.client.Get(key)
+	return err
+}
+
+func (m *MemcacheClient) Close() error {
+	// gomemcache client doesn't explicitly need closing as it manages connections lazily,
+	// but strictly speaking we can't close the *Client itself, just the connections it holds.
+	// For this benchmark where we create one per routine, it's fine.
+	return nil
+}
+
+// RedisClient implements Benchmarker for Redis
+type RedisClient struct {
+	client *redis.Client
+}
+
+func NewRedisClient(addr string) *RedisClient {
+	return &RedisClient{
+		client: redis.NewClient(&redis.Options{
+			Addr: addr,
+		}),
+	}
+}
+
+func (r *RedisClient) Set(key string, value []byte) error {
+	return r.client.Set(context.Background(), key, value, 0).Err()
+}
+
+func (r *RedisClient) Get(key string) error {
+	return r.client.Get(context.Background(), key).Err()
+}
+
+func (r *RedisClient) Close() error {
+	return r.client.Close()
+}
+
+func main() {
+	flag.Parse()
+
+	// Wait for server to come up (manual check)
+	conn, err := net.DialTimeout("tcp", *host, 2*time.Second)
+	if err != nil {
+		log.Fatalf("Cannot connect to %s: %v", *host, err)
+	}
+	conn.Close()
+
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		pprof.StartCPUProfile(f)
+		defer pprof.StopCPUProfile()
+	}
+
+	if !*csvOutput {
+		fmt.Printf("Benchmarking %s (%s) with %d clients, %d requests, %d byte values, %d keys...\n", *host, *protocol, *clients, *requests, *valueSize, *keys)
+	}
+
+	// Pre-generate keys/values to avoid creating garbage during critical path
+	keyParams := make([]string, *keys)
+	for i := 0; i < *keys; i++ {
+		keyParams[i] = fmt.Sprintf("key_%d", i)
+	}
+
+	val := make([]byte, *valueSize)
+	rand.Read(val)
+
+	// Factory function to create new clients based on protocol
+	// Note: For benchmarks, creating a new client per goroutine (or sharing one) depends on the driver.
+	// gomemcache is typically thread-safe but here we mimicked the original behavior of one client per routine.
+	// go-redis is also thread-safe and uses a pool.
+	// To strictly emulate "concurrent clients", creating separate instances is cleaner for isolation,
+	// but might just be multiple connections from one pool in go-redis case.
+	// For simplicity, we create a new "Benchmarker" wrapper per routine.
+
+	clientFactory := func() Benchmarker {
+		switch *protocol {
+		case "memcache":
+			return NewMemcacheClient(*host)
+		case "redis":
+			return NewRedisClient(*host)
+		default:
+			log.Fatalf("Unknown protocol: %s", *protocol)
+			return nil
+		}
+	}
+
+	// SET Benchmark
+	if *operation == "set" || *operation == "both" {
+		start := time.Now()
+		runBenchmark("SET", clientFactory, func(b Benchmarker) error {
+			k := keyParams[rand.Intn(*keys)]
+			return b.Set(k, val)
+		})
+		elapsed := time.Since(start)
+		printResults("SET", elapsed)
+	}
+
+	// GET Benchmark
+	if *operation == "get" || *operation == "both" {
+		start := time.Now()
+		runBenchmark("GET", clientFactory, func(b Benchmarker) error {
+			k := keyParams[rand.Intn(*keys)]
+			return b.Get(k)
+		})
+		elapsed := time.Since(start)
+		printResults("GET", elapsed)
+	}
+}
+
+func runBenchmark(name string, factory func() Benchmarker, op func(Benchmarker) error) {
+	var wg sync.WaitGroup
+	requestsPerClient := *requests / *clients
+
+	for i := 0; i < *clients; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			client := factory()
+			defer client.Close()
+
+			for j := 0; j < requestsPerClient; j++ {
+				_ = op(client) // Ignoring errors for raw throughput
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func printResults(op string, elapsed time.Duration) {
+	rps := float64(*requests) / elapsed.Seconds()
+	if *csvOutput {
+		// Mode,Backend,Protocol,Operation,RPS,TimePerReq(ms)
+		fmt.Printf("%s,%s,%s,%s,%.2f,%.4f\n", *mode, *label, *protocol, op, rps, elapsed.Seconds()*1000/float64(*requests))
+	} else {
+		fmt.Printf("%-5s: %.2f req/sec (Time: %s)\n", op, rps, elapsed)
+	}
+}
