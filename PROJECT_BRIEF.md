@@ -38,19 +38,18 @@ Uses **fixed-size records** with `fseek` for random access (not append-only).
 
 #### Keys File Format (`keys`)
 
-Each record is exactly **1060 bytes** at offset `keyId * 1060`:
+Each record is exactly **1059 bytes** at offset `keyId * 1059`:
 
 ```
-┌─────────┬──────────┬──────────────┬──────────────┬─────────┬──────────┬────────┬─────────┐
-│  free   │  keyLen  │     key      │ lastAccessed │   cas   │  expiry  │ bucket │ slotIdx │
-│ 1 byte  │ 2 bytes  │  1024 bytes  │   8 bytes    │ 8 bytes │ 8 bytes  │ 1 byte │ 8 bytes │
-└─────────┴──────────┴──────────────┴──────────────┴─────────┴──────────┴────────┴─────────┘
-         Total: 1060 bytes per record
+┌──────────┬──────────────┬──────────────┬─────────┬──────────┬────────┬─────────┐
+│  keyLen  │     key      │ lastAccessed │   cas   │  expiry  │ bucket │ slotIdx │
+│ 2 bytes  │  1024 bytes  │   8 bytes    │ 8 bytes │ 8 bytes  │ 1 byte │ 8 bytes │
+└──────────┴──────────────┴──────────────┴─────────┴──────────┴────────┴─────────┘
+         Total: 1059 bytes per record
 ```
 
 | Field          | Size    | Description                                               |
 |----------------|---------|-----------------------------------------------------------|
-| `free`         | 1 byte  | Reserved (continuous compaction keeps file compact)       |
 | `keyLen`       | 2 bytes | Actual key length (uint16, 0-1024)                        |
 | `key`          | 1024 bytes | Key string, null-padded                                |
 | `lastAccessed` | 8 bytes | Unix timestamp (int64), for LRU                           |
@@ -59,7 +58,7 @@ Each record is exactly **1060 bytes** at offset `keyId * 1060`:
 | `bucket`       | 1 byte  | Data bucket index (0-15)                                  |
 | `slotIdx`      | 8 bytes | Slot index within the bucket (int64)                      |
 
-**keyId** = record index = file offset / 1060
+**keyId** = record index = file offset / 1059
 
 ---
 

@@ -11,9 +11,9 @@ import (
 
 // Record sizes
 const (
-	KeyRecordSize  = 1 + 2 + 1024 + 8 + 8 + 8 + 1 + 8 // 1060 bytes: free, keyLen, key, lastAccessed, cas, expiry, bucket, slotIdx
+	KeyRecordSize  = 1059 // 2 + 1024 + 8 + 8 + 8 + 1 + 8 (keyLen, key, lastAccessed, cas, expiry, bucket, slotIdx)
 	MaxKeySize     = 1024
-	DataHeaderSize = 1 + 4 // free + length
+	DataHeaderSize = 1 + 4 // free + length (data files still have free flag)
 )
 
 // Bucket configuration: 16 buckets from 1KB to 64MB (doubling each time)
@@ -23,7 +23,7 @@ const (
 	MaxBucketSize = 64 * 1024 * 1024 // 64MB
 )
 
-// Free flags
+// Free flags (for data files only - key files use continuous compaction)
 const (
 	FlagInUse   = 0x00
 	FlagDeleted = 0x01
@@ -193,13 +193,6 @@ func (s *Storage) WriteKeyRecord(keyId int64, rec *KeyRecord) error {
 	if err == nil && s.syncAlways {
 		err = s.keysFile.Sync()
 	}
-	return err
-}
-
-// MarkKeyFree marks a key record as free
-func (s *Storage) MarkKeyFree(keyId int64) error {
-	offset := keyId * KeyRecordSize
-	_, err := s.keysFile.WriteAt([]byte{FlagDeleted}, offset)
 	return err
 }
 

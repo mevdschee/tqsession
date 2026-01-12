@@ -46,12 +46,11 @@ type Response struct {
 
 // Worker is the single-threaded storage worker
 type Worker struct {
-	storage   *Storage
-	index     *Index
-	freeLists *FreeLists
-	reqChan   chan *Request
-	stopChan  chan struct{}
-	wg        sync.WaitGroup
+	storage  *Storage
+	index    *Index
+	reqChan  chan *Request
+	stopChan chan struct{}
+	wg       sync.WaitGroup
 
 	nextKeyId  int64
 	nextSlotId [NumBuckets]int64
@@ -66,7 +65,6 @@ func NewWorker(storage *Storage, defaultExpiry time.Duration, maxDataSize int64)
 	w := &Worker{
 		storage:       storage,
 		index:         NewIndex(),
-		freeLists:     NewFreeLists(),
 		reqChan:       make(chan *Request, 1000),
 		stopChan:      make(chan struct{}),
 		startTime:     time.Now(),
@@ -113,10 +111,8 @@ func (w *Worker) recover() error {
 		}
 		key := string(keyBytes[:nullIdx])
 
-		// Skip expired entries
+		// Skip expired entries (they will be compacted on first access/write)
 		if rec.Expiry > 0 && rec.Expiry <= now {
-			w.freeLists.PushKey(keyId)
-			w.freeLists.PushData(int(rec.Bucket), rec.SlotIdx)
 			continue
 		}
 
@@ -320,16 +316,13 @@ func (w *Worker) doSet(key string, value []byte, ttl time.Duration, existingCas 
 		w.compactDataSlot(existing.Bucket, existing.SlotIdx)
 	}
 
-	// Allocate key slot
+	// Allocate key slot - always append with continuous compaction
 	var keyId int64
 	if exists {
 		keyId = existing.KeyId
 	} else {
-		keyId = w.freeLists.PopKey()
-		if keyId < 0 {
-			keyId = w.nextKeyId
-			w.nextKeyId++
-		}
+		keyId = w.nextKeyId
+		w.nextKeyId++
 	}
 
 	// Allocate data slot - always append (continuous defrag keeps files compact)
@@ -659,10 +652,22 @@ func (w *Worker) doAppendPrepend(key string, value []byte, append bool) *Respons
 }
 
 func (w *Worker) handleFlushAll(req *Request) *Response {
-	// This is a simplified flush - in practice we'd iterate and delete
+	// Reset in-memory structures
 	w.index = NewIndex()
-	w.freeLists = NewFreeLists()
-	// TODO: Truncate files
+	w.liveDataSize = 0
+
+	// Truncate all files to reclaim space
+	w.storage.TruncateKeysFile(0)
+	for bucket := 0; bucket < NumBuckets; bucket++ {
+		w.storage.TruncateDataFile(bucket, 0)
+	}
+
+	// Reset slot counters
+	w.nextKeyId = 0
+	for i := range w.nextSlotId {
+		w.nextSlotId[i] = 0
+	}
+
 	return &Response{}
 }
 
