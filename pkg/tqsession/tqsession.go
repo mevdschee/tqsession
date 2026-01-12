@@ -125,6 +125,9 @@ func (c *Cache) Get(key string) ([]byte, uint64, error) {
 		Op:  OpGet,
 		Key: key,
 	})
+	if resp.Err == ErrKeyNotFound {
+		return nil, 0, os.ErrNotExist
+	}
 	return resp.Value, resp.Cas, resp.Err
 }
 
