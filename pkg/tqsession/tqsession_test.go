@@ -731,3 +731,169 @@ func TestOverwrite(t *testing.T) {
 		t.Errorf("Expected 1 item after overwrite, got %s", stats["curr_items"])
 	}
 }
+
+func TestLRUEviction(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "tqsession_lru_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	config := DefaultConfig()
+	config.DataDir = tmpDir
+	config.SyncStrategy = SyncNone
+	config.MaxDataSize = 5000 // 5KB limit for live data
+
+	c, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	// Write 10 items of 1KB each = 10KB total
+	// With a 5KB limit, we should evict ~5 items
+	val1K := make([]byte, 1024)
+	for i := 0; i < 10; i++ {
+		key := fmt.Sprintf("key%d", i)
+		if _, err := c.Set(key, val1K, 0); err != nil {
+			t.Fatalf("Set failed for key %s: %v", key, err)
+		}
+	}
+
+	// Check live data size is within limits
+	liveSize := c.worker.LiveDataSize()
+	if liveSize > config.MaxDataSize {
+		t.Errorf("liveDataSize %d exceeds MaxDataSize %d", liveSize, config.MaxDataSize)
+	}
+
+	// Count surviving items
+	survivingItems := 0
+	for i := 0; i < 10; i++ {
+		key := fmt.Sprintf("key%d", i)
+		if _, _, err := c.Get(key); err == nil {
+			survivingItems++
+		}
+	}
+
+	// Should have ~5 items left (within limits)
+	if survivingItems > 6 {
+		t.Errorf("Expected around 5 items after eviction, got %d", survivingItems)
+	}
+
+	t.Logf("After eviction: liveSize=%d, survivingItems=%d", liveSize, survivingItems)
+}
+
+func TestLRUAccessOrder(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "tqsession_lru_order_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	config := DefaultConfig()
+	config.DataDir = tmpDir
+	config.SyncStrategy = SyncNone
+	config.MaxDataSize = 3200 // Enough for 3x 1KB items
+
+	c, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	// Write 3 items of 1KB each (within limit)
+	val1K := make([]byte, 1024)
+	for i := 0; i < 3; i++ {
+		key := fmt.Sprintf("key%d", i)
+		if _, err := c.Set(key, val1K, 0); err != nil {
+			t.Fatalf("Set failed: %v", err)
+		}
+	}
+
+	// Verify all 3 exist
+	for i := 0; i < 3; i++ {
+		key := fmt.Sprintf("key%d", i)
+		if _, _, err := c.Get(key); err != nil {
+			t.Fatalf("key%d should exist: %v", i, err)
+		}
+	}
+
+	// Access key0 to make it most recently used
+	c.Get("key0")
+
+	// Write a 4th item - should evict key1 (LRU, was never touched after initial write)
+	if _, err := c.Set("key3", val1K, 0); err != nil {
+		t.Fatalf("Set key3 failed: %v", err)
+	}
+
+	// key0 should still exist (was touched)
+	if _, _, err := c.Get("key0"); err != nil {
+		t.Errorf("key0 should still exist after access, got error: %v", err)
+	}
+
+	// key3 should exist (just added)
+	if _, _, err := c.Get("key3"); err != nil {
+		t.Errorf("key3 should exist, got error: %v", err)
+	}
+
+	// key1 should be evicted (was LRU - oldest access, never touched)
+	if _, _, err := c.Get("key1"); err == nil {
+		t.Errorf("key1 should have been evicted")
+	}
+}
+
+func TestExpiredEvictedFirst(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "tqsession_expired_evict_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	config := DefaultConfig()
+	config.DataDir = tmpDir
+	config.SyncStrategy = SyncNone
+	config.MaxDataSize = 3200 // Enough for 3x 1KB items
+
+	c, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	val1K := make([]byte, 1024)
+
+	// Write key0 with very short TTL
+	if _, err := c.Set("key0", val1K, 100*time.Millisecond); err != nil {
+		t.Fatalf("Set key0 failed: %v", err)
+	}
+
+	// Write key1 and key2 without TTL
+	if _, err := c.Set("key1", val1K, 0); err != nil {
+		t.Fatalf("Set key1 failed: %v", err)
+	}
+	if _, err := c.Set("key2", val1K, 0); err != nil {
+		t.Fatalf("Set key2 failed: %v", err)
+	}
+
+	// Wait for key0 to expire
+	time.Sleep(200 * time.Millisecond)
+
+	// Write key3 - should evict expired key0 first, not key1 (LRU)
+	if _, err := c.Set("key3", val1K, 0); err != nil {
+		t.Fatalf("Set key3 failed: %v", err)
+	}
+
+	// key0 should be gone (expired and evicted)
+	if _, _, err := c.Get("key0"); err == nil {
+		t.Errorf("key0 should have been evicted (expired)")
+	}
+
+	// key1, key2, key3 should all exist (expired items evicted first)
+	for _, key := range []string{"key1", "key2", "key3"} {
+		if _, _, err := c.Get(key); err != nil {
+			t.Errorf("%s should still exist, got error: %v", key, err)
+		}
+	}
+
+	t.Log("Expired items correctly evicted before LRU items")
+}

@@ -1,0 +1,232 @@
+package config
+
+import (
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/mevdschee/tqsession/pkg/tqsession"
+)
+
+// Config represents the application configuration.
+// It maps to the INI config file and converts to tqsession.Config.
+type Config struct {
+	Server struct {
+		Port string
+	}
+	Storage struct {
+		DataDir       string
+		DefaultExpiry string // e.g., "0s", "1h"
+		MaxKeySize    string // e.g., "250B"
+		MaxValueSize  string // e.g., "1MB"
+		MaxDataSize   string // e.g., "64MB" - max live data before LRU eviction
+		SyncStrategy  string // "none", "periodic"
+		SyncInterval  string // e.g., "1s"
+	}
+}
+
+// Load reads an INI configuration file from the given path.
+func Load(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	return parseINI(string(data))
+}
+
+func parseINI(data string) (*Config, error) {
+	cfg := &Config{}
+
+	lines := strings.Split(data, "\n")
+	currentSection := ""
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			currentSection = strings.ToLower(line[1 : len(line)-1])
+			continue
+		}
+
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+
+		key := strings.TrimSpace(strings.ToLower(parts[0]))
+		value := strings.TrimSpace(parts[1])
+		// Remove inline comments
+		if idx := strings.Index(value, " #"); idx != -1 {
+			value = strings.TrimSpace(value[:idx])
+		}
+
+		switch currentSection {
+		case "server":
+			switch key {
+			case "port":
+				cfg.Server.Port = value
+			}
+		case "storage":
+			switch key {
+			case "data_dir":
+				cfg.Storage.DataDir = value
+			case "default_expiry":
+				cfg.Storage.DefaultExpiry = value
+			case "max_key_size":
+				cfg.Storage.MaxKeySize = value
+			case "max_value_size":
+				cfg.Storage.MaxValueSize = value
+			case "max_data_size":
+				cfg.Storage.MaxDataSize = value
+			case "sync_strategy":
+				cfg.Storage.SyncStrategy = value
+			case "sync_interval":
+				cfg.Storage.SyncInterval = value
+			}
+		}
+	}
+
+	return cfg, nil
+}
+
+// ToTQSessionConfig converts the file-based configuration to the library's config struct.
+func (c *Config) ToTQSessionConfig() (tqsession.Config, error) {
+	cfg := tqsession.DefaultConfig()
+
+	if c.Storage.DataDir != "" {
+		cfg.DataDir = c.Storage.DataDir
+	}
+
+	if c.Storage.DefaultExpiry != "" {
+		dur, err := time.ParseDuration(c.Storage.DefaultExpiry)
+		if err != nil {
+			return cfg, fmt.Errorf("invalid default_expiry: %w", err)
+		}
+		cfg.DefaultExpiry = dur
+	}
+
+	if c.Storage.MaxKeySize != "" {
+		size, err := parseBytes(c.Storage.MaxKeySize)
+		if err != nil {
+			return cfg, fmt.Errorf("invalid max_key_size: %w", err)
+		}
+		cfg.MaxKeySize = size
+	}
+
+	if c.Storage.MaxValueSize != "" {
+		size, err := parseBytes(c.Storage.MaxValueSize)
+		if err != nil {
+			return cfg, fmt.Errorf("invalid max_value_size: %w", err)
+		}
+		cfg.MaxValueSize = size
+	}
+
+	if c.Storage.MaxDataSize != "" {
+		size, err := parseBytes64(c.Storage.MaxDataSize)
+		if err != nil {
+			return cfg, fmt.Errorf("invalid max_data_size: %w", err)
+		}
+		cfg.MaxDataSize = size
+	}
+
+	if c.Storage.SyncStrategy != "" {
+		switch c.Storage.SyncStrategy {
+		case "periodic":
+			cfg.SyncStrategy = tqsession.SyncPeriodic
+		case "none":
+			cfg.SyncStrategy = tqsession.SyncNone
+		default:
+			return cfg, fmt.Errorf("invalid sync_strategy: %s (valid: none, periodic)", c.Storage.SyncStrategy)
+		}
+	}
+
+	if c.Storage.SyncInterval != "" {
+		dur, err := time.ParseDuration(c.Storage.SyncInterval)
+		if err != nil {
+			return cfg, fmt.Errorf("invalid sync_interval: %w", err)
+		}
+		cfg.SyncInterval = dur
+	}
+
+	return cfg, nil
+}
+
+func parseBytes(s string) (int, error) {
+	s = strings.TrimSpace(strings.ToUpper(s))
+	if s == "" {
+		return 0, nil
+	}
+
+	var multiplier int64 = 1
+	if strings.HasSuffix(s, "GB") {
+		multiplier = 1024 * 1024 * 1024
+		s = strings.TrimSuffix(s, "GB")
+	} else if strings.HasSuffix(s, "G") {
+		multiplier = 1024 * 1024 * 1024
+		s = strings.TrimSuffix(s, "G")
+	} else if strings.HasSuffix(s, "MB") {
+		multiplier = 1024 * 1024
+		s = strings.TrimSuffix(s, "MB")
+	} else if strings.HasSuffix(s, "M") {
+		multiplier = 1024 * 1024
+		s = strings.TrimSuffix(s, "M")
+	} else if strings.HasSuffix(s, "KB") {
+		multiplier = 1024
+		s = strings.TrimSuffix(s, "KB")
+	} else if strings.HasSuffix(s, "K") {
+		multiplier = 1024
+		s = strings.TrimSuffix(s, "K")
+	} else if strings.HasSuffix(s, "B") {
+		s = strings.TrimSuffix(s, "B")
+	}
+
+	val, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
+	if err != nil {
+		return 0, err
+	}
+
+	return int(val * multiplier), nil
+}
+
+func parseBytes64(s string) (int64, error) {
+	s = strings.TrimSpace(strings.ToUpper(s))
+	if s == "" {
+		return 0, nil
+	}
+
+	var multiplier int64 = 1
+	if strings.HasSuffix(s, "GB") {
+		multiplier = 1024 * 1024 * 1024
+		s = strings.TrimSuffix(s, "GB")
+	} else if strings.HasSuffix(s, "G") {
+		multiplier = 1024 * 1024 * 1024
+		s = strings.TrimSuffix(s, "G")
+	} else if strings.HasSuffix(s, "MB") {
+		multiplier = 1024 * 1024
+		s = strings.TrimSuffix(s, "MB")
+	} else if strings.HasSuffix(s, "M") {
+		multiplier = 1024 * 1024
+		s = strings.TrimSuffix(s, "M")
+	} else if strings.HasSuffix(s, "KB") {
+		multiplier = 1024
+		s = strings.TrimSuffix(s, "KB")
+	} else if strings.HasSuffix(s, "K") {
+		multiplier = 1024
+		s = strings.TrimSuffix(s, "K")
+	} else if strings.HasSuffix(s, "B") {
+		s = strings.TrimSuffix(s, "B")
+	}
+
+	val, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
+	if err != nil {
+		return 0, err
+	}
+
+	return val * multiplier, nil
+}

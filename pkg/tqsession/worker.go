@@ -58,9 +58,11 @@ type Worker struct {
 	startTime  time.Time
 
 	defaultExpiry time.Duration
+	maxDataSize   int64 // Maximum live data size (0 = unlimited)
+	liveDataSize  int64 // Current live data size in bytes
 }
 
-func NewWorker(storage *Storage, defaultExpiry time.Duration) (*Worker, error) {
+func NewWorker(storage *Storage, defaultExpiry time.Duration, maxDataSize int64) (*Worker, error) {
 	w := &Worker{
 		storage:       storage,
 		index:         NewIndex(),
@@ -69,6 +71,7 @@ func NewWorker(storage *Storage, defaultExpiry time.Duration) (*Worker, error) {
 		stopChan:      make(chan struct{}),
 		startTime:     time.Now(),
 		defaultExpiry: defaultExpiry,
+		maxDataSize:   maxDataSize,
 	}
 
 	// Recover state from disk
@@ -351,6 +354,15 @@ func (w *Worker) doSet(key string, value []byte, ttl time.Duration, existingCas 
 		return &Response{Err: err}
 	}
 
+	// Update live data size (add new, subtract old if overwriting)
+	w.liveDataSize += int64(len(value))
+	if exists {
+		w.liveDataSize -= int64(existing.Length)
+	}
+
+	// Trigger LRU eviction if needed
+	w.lruEvict()
+
 	// Update index
 	entry := &IndexEntry{
 		Key:          key,
@@ -385,6 +397,9 @@ func (w *Worker) deleteEntry(entry *IndexEntry) {
 	// Mark data slot as free
 	w.storage.MarkDataFree(entry.Bucket, entry.SlotIdx)
 	w.freeLists.PushData(entry.Bucket, entry.SlotIdx)
+
+	// Update live data size
+	w.liveDataSize -= int64(entry.Length)
 
 	// Remove from index
 	w.index.Delete(entry.Key)
@@ -613,4 +628,51 @@ func (w *Worker) cleanupExpired() {
 // StartTime returns when the worker was started
 func (w *Worker) StartTime() time.Time {
 	return w.startTime
+}
+
+// lruEvict evicts items until liveDataSize <= maxDataSize.
+// Phase 1: Evict expired items first
+// Phase 2: Evict from LRU tail (least recently used)
+func (w *Worker) lruEvict() {
+	if w.maxDataSize <= 0 {
+		return // No limit set
+	}
+
+	now := time.Now().UnixMilli()
+
+	// Phase 1: Evict expired items first
+	for w.liveDataSize > w.maxDataSize {
+		entry := w.index.expiryHeap.PeekMin()
+		if entry == nil || entry.Expiry > now || entry.Expiry == 0 {
+			break
+		}
+
+		// Find the index entry by keyId and delete it
+		indexEntry := w.index.GetByKeyId(entry.KeyId)
+		if indexEntry != nil {
+			w.deleteEntry(indexEntry)
+		} else {
+			// Just remove from heap if entry not found
+			w.index.expiryHeap.Remove(entry.KeyId)
+		}
+	}
+
+	// Phase 2: LRU eviction from tail
+	for w.liveDataSize > w.maxDataSize {
+		node := w.index.lruList.PopTail()
+		if node == nil {
+			break
+		}
+
+		// Find and delete the entry by keyId
+		indexEntry := w.index.GetByKeyId(node.KeyId)
+		if indexEntry != nil {
+			w.deleteEntry(indexEntry)
+		}
+	}
+}
+
+// LiveDataSize returns the current live data size in bytes
+func (w *Worker) LiveDataSize() int64 {
+	return w.liveDataSize
 }

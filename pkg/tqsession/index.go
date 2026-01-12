@@ -227,6 +227,7 @@ type Index struct {
 	btree      *btree.BTree
 	expiryHeap *ExpiryHeap
 	lruList    *LRUList
+	keyIdMap   map[int64]string // keyId → key for reverse lookup
 }
 
 func NewIndex() *Index {
@@ -234,6 +235,7 @@ func NewIndex() *Index {
 		btree:      btree.New(32), // degree 32 for good performance
 		expiryHeap: NewExpiryHeap(),
 		lruList:    NewLRUList(),
+		keyIdMap:   make(map[int64]string),
 	}
 }
 
@@ -250,6 +252,7 @@ func (idx *Index) Get(key string) (*IndexEntry, bool) {
 // Set inserts or updates an entry
 func (idx *Index) Set(entry *IndexEntry) {
 	idx.btree.ReplaceOrInsert(*entry)
+	idx.keyIdMap[entry.KeyId] = entry.Key
 
 	// Update expiry heap
 	if entry.Expiry > 0 {
@@ -273,9 +276,20 @@ func (idx *Index) Delete(key string) *IndexEntry {
 		return nil
 	}
 	entry := item.(IndexEntry)
+	delete(idx.keyIdMap, entry.KeyId)
 	idx.expiryHeap.Remove(entry.KeyId)
 	idx.lruList.Remove(entry.KeyId)
 	return &entry
+}
+
+// GetByKeyId retrieves an entry by keyId
+func (idx *Index) GetByKeyId(keyId int64) *IndexEntry {
+	key, ok := idx.keyIdMap[keyId]
+	if !ok {
+		return nil
+	}
+	entry, _ := idx.Get(key)
+	return entry
 }
 
 // Touch updates the last accessed time for an entry

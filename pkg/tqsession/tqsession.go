@@ -25,7 +25,7 @@ type Config struct {
 	DefaultExpiry time.Duration
 	MaxKeySize    int
 	MaxValueSize  int
-	MaxItems      int // Maximum items before LRU eviction (0=unlimited)
+	MaxDataSize   int64 // Maximum live data size in bytes before LRU eviction (0=unlimited)
 	SyncStrategy  SyncStrategy
 	SyncInterval  time.Duration
 }
@@ -37,7 +37,7 @@ func DefaultConfig() Config {
 		DefaultExpiry: 0,
 		MaxKeySize:    250,
 		MaxValueSize:  1024 * 1024, // 1MB
-		MaxItems:      0,           // Unlimited
+		MaxDataSize:   0,           // Unlimited
 		SyncStrategy:  SyncPeriodic,
 		SyncInterval:  1 * time.Second,
 	}
@@ -60,7 +60,7 @@ func New(cfg Config) (*Cache, error) {
 		return nil, fmt.Errorf("failed to create storage: %w", err)
 	}
 
-	worker, err := NewWorker(storage, cfg.DefaultExpiry)
+	worker, err := NewWorker(storage, cfg.DefaultExpiry, cfg.MaxDataSize)
 	if err != nil {
 		storage.Close()
 		return nil, fmt.Errorf("failed to create worker: %w", err)

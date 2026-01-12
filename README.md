@@ -1,18 +1,137 @@
 # TQSession
 
-TQSession is a high-performance, persistent session storage system implemented in Go. It allows usage both as an **embeddable Go library** and as a **standalone server application** (CLI).
-
-Blog post: 
+TQSession is a high-performance, persistent session storage server for PHP. It provides a Memcached-compatible interface
+with disk-based persistence, making it ideal for session storage that survives restarts.
 
 ## Features
 
-- **Persistence**: Built around disk storage
-- **Protocol Support**:
-    - Memcached Text Protocol (Legacy & Debugging)
-    - Memcached Binary Protocol (Modern standard, default for PHP 7+)
-- **Session Handler Ready**: Fully compatible with PHP's native `memcached` session handler.
-- **TTL Support**: Built-in support for key expiration (Time To Live).
+- **Persistent Storage**: Data stored on disk, survives server restarts
+- **Memcached Compatible**: Works with PHP's native `memcached` session handler
+- **Protocol Support**: Both Memcached text and binary protocols
+- **TTL Support**: Millisecond-precision key expiration
+- **CAS Operations**: Compare-and-swap for atomic updates
+- **Single-worker architecture**: Simple and predictable performance
+
+## Requirements
+
+- Go 1.21 or later
+
+## Installation
+
+```bash
+go install github.com/mevdschee/tqsession/cmd/tqsession@latest
+```
+
+Or build from source:
+
+```bash
+git clone https://github.com/mevdschee/tqsession.git
+cd tqsession
+go build -o tqsession ./cmd/tqsession
+```
+
+## Usage
+
+```bash
+tqsession [options]
+```
+
+### Command-Line Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-data-dir` | `data` | Directory for persistent data files |
+| `-port` | `:11211` | Port to listen on (Memcached default) |
+| `-sync-mode` | `periodic` | Sync mode: `none`, `periodic` |
+| `-sync-interval` | `1s` | Interval between fsync calls (when periodic) |
+| `-default-ttl` | `0` | Default TTL for keys (`0` = no expiry) |
+| `-max-data-size` | `67108864` | Max live data size in bytes for LRU eviction (`0` = unlimited) |
+
+### Examples
+
+```bash
+# Start with defaults (port 11211, data in ./data/, 64MB limit)
+tqsession
+
+# Custom port and data directory
+tqsession -port :11212 -data-dir /var/lib/tqsession
+
+# Set default TTL to 24 hours
+tqsession -default-ttl 24h
+
+# Increase max data size to 1GB
+tqsession -max-data-size 1073741824
+
+# Faster sync (more durability, lower performance)
+tqsession -sync-interval 100ms
+```
+
+## PHP Configuration
+
+Configure PHP to use TQSession as the session handler:
+
+```ini
+session.save_handler = memcached
+session.save_path = "localhost:11211"
+```
+
+Or with PHP-FPM:
+
+```ini
+php_admin_value[session.save_handler] = memcached
+php_admin_value[session.save_path] = "localhost:11211"
+```
 
 ## Architecture
 
-See [PROJECT_BRIEF.md](PROJECT_BRIEF.md) for architectural details.
+TQSession uses a **single-worker architecture** for simplicity and predictable performance:
+
+| Goroutine | Responsibility |
+|-----------|----------------|
+| **Server** | Accepts client connections, routes to Storage worker |
+| **Storage** | Handles all file operations sequentially (no locks needed) |
+| **Sync** | Calls `fsync` periodically (configurable interval) |
+
+### Storage Format
+
+**Keys file** (`keys`): Fixed 1058-byte records
+- Key string (1024 bytes), CAS token, expiry (milliseconds), bucket/slot pointers
+
+**Data files** (`data_00` - `data_15`): 16 size-bucketed files (1KB → 64MB)
+- Each slot stores: free flag + length + data
+
+### In-Memory Structures
+
+- **B-tree index**: O(log n) key lookups
+- **Expiry min-heap**: Efficient TTL cleanup without scanning
+- **LRU list**: Evicts least recently used items when size limit reached (expired first)
+- **Free lists**: O(1) slot allocation via stack-based recycling
+
+See [PROJECT_BRIEF.md](PROJECT_BRIEF.md) for detailed architecture.
+
+## Benchmarks
+
+Run the included benchmark:
+
+```bash
+cd benchmarks/getset
+./getset_benchmark.sh
+```
+
+## Testing
+
+```bash
+go test ./pkg/tqsession/...
+```
+
+## Profiling
+
+A pprof server runs on `localhost:6062` for profiling:
+
+```bash
+go tool pprof http://localhost:6062/debug/pprof/profile?seconds=30
+```
+
+## License
+
+MIT License - see [LICENSE](LICENSE) file.
