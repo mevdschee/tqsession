@@ -104,20 +104,9 @@ run_benchmark_set() {
 
     # --- Start TQSession ---
     echo "Starting TQSession (Sync Interval: $SYNC_INTERVAL)..."
-
-    cat > benchmark_config.conf <<EOF
-[server]
-listen = :11221
-
-[storage]
-data-dir = /tmp/tqsession-bench
-sync-mode = $SYNC_MODE
-sync-interval = $SYNC_INTERVAL
-max-data-size = 1GB
-EOF
     rm -rf /tmp/tqsession-bench
     mkdir -p /tmp/tqsession-bench
-    ./tqsession-server -config benchmark_config.conf > /dev/null 2>&1 &
+    ./tqsession-server -config getset_benchmark.conf > /dev/null 2>&1 &
     TQ_PID=$!
 
     # --- Start Redis ---
