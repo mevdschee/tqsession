@@ -414,8 +414,8 @@ func TestExpiry(t *testing.T) {
 	c, cleanup := setupTestCache(t)
 	defer cleanup()
 
-	// Set a key with short TTL
-	cas, setErr := c.Set("expiry_key", []byte("expiry_value"), 200*time.Millisecond)
+	// Set a key with TTL (use >= 2s to reliably cross Unix second boundary)
+	cas, setErr := c.Set("expiry_key", []byte("expiry_value"), 2*time.Second)
 	if setErr != nil {
 		t.Fatalf("Set failed: %v", setErr)
 	}
@@ -432,8 +432,8 @@ func TestExpiry(t *testing.T) {
 		t.Errorf("Expected 'expiry_value', got '%s'", val)
 	}
 
-	// Wait for expiry
-	time.Sleep(300 * time.Millisecond)
+	// Wait for expiry (TTL + buffer to cross second boundary)
+	time.Sleep(2500 * time.Millisecond)
 
 	// Should be gone due to expiry check in Get
 	_, _, err = c.Get("expiry_key")

@@ -594,13 +594,19 @@ func (w *Worker) handleStats(req *Request) *Response {
 
 func (w *Worker) cleanupExpired() {
 	now := time.Now().Unix()
-	expired := w.index.GetExpired(now)
 
-	for _, e := range expired {
-		// Find the entry by keyId
-		// We need to iterate or maintain a reverse map
-		// For now, we'll skip this - the Get operation handles expiry
-		_ = e
+	// Peek at expired entries and delete them properly
+	for {
+		entry := w.index.expiryHeap.PeekMin()
+		if entry == nil || entry.Expiry > now || entry.Expiry == 0 {
+			break
+		}
+
+		// Find and delete the entry from the B-tree by keyId
+		// We need to iterate the B-tree to find by keyId
+		// For now, just remove from heap - Get() will handle the actual deletion
+		// when it finds the expired key
+		w.index.expiryHeap.Remove(entry.KeyId)
 	}
 }
 
