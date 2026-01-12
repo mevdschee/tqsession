@@ -2,6 +2,7 @@ package tqsession
 
 import (
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -50,6 +51,7 @@ type Worker struct {
 	freeLists *FreeLists
 	reqChan   chan *Request
 	stopChan  chan struct{}
+	wg        sync.WaitGroup
 
 	nextKeyId  int64
 	nextSlotId [NumBuckets]int64
@@ -150,12 +152,14 @@ func (w *Worker) recover() error {
 
 // Start starts the worker goroutine
 func (w *Worker) Start() {
+	w.wg.Add(1)
 	go w.run()
 }
 
-// Stop stops the worker
+// Stop stops the worker and waits for it to finish
 func (w *Worker) Stop() {
 	close(w.stopChan)
+	w.wg.Wait()
 }
 
 // RequestChan returns the request channel
@@ -164,6 +168,8 @@ func (w *Worker) RequestChan() chan *Request {
 }
 
 func (w *Worker) run() {
+	defer w.wg.Done()
+
 	// Ticker for expiry cleanup
 	expiryTicker := time.NewTicker(100 * time.Millisecond)
 	defer expiryTicker.Stop()

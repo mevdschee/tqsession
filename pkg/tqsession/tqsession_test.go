@@ -411,7 +411,33 @@ func TestStats(t *testing.T) {
 }
 
 func TestExpiry(t *testing.T) {
-	t.Skip("Skipping due to timing sensitivity - expiry is checked in Get()")
+	c, cleanup := setupTestCache(t)
+	defer cleanup()
+
+	// Set a key with short TTL (same pattern as TestTouch which passes)
+	cas, setErr := c.Set("expiry_key", []byte("expiry_value"), 500*time.Millisecond)
+	if setErr != nil {
+		t.Fatalf("Set failed: %v", setErr)
+	}
+	t.Logf("Set returned cas=%d", cas)
+
+	// Should be accessible immediately (like TestTouch)
+	val, _, err := c.Get("expiry_key")
+	if err != nil {
+		t.Fatalf("Key should be accessible immediately: err=%v", err)
+	}
+	if string(val) != "expiry_value" {
+		t.Errorf("Expected 'expiry_value', got '%s'", val)
+	}
+
+	// Wait for expiry
+	time.Sleep(600 * time.Millisecond)
+
+	// Should be gone due to expiry check in Get
+	_, _, err = c.Get("expiry_key")
+	if err != os.ErrNotExist {
+		t.Errorf("Expected ErrNotExist after expiry, got %v", err)
+	}
 }
 
 func TestLargeValue(t *testing.T) {
