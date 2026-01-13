@@ -1,6 +1,6 @@
 # TQSession
 
-TQSession is a high-performance, persistent session storage server for PHP. It provides a Memcached-compatible interface
+TQSession is a high-performance, persistent session storage server. It provides a Memcached-compatible interface
 with disk-based persistence, making it ideal for session storage that survives restarts.
 
 ## Features
