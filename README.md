@@ -82,7 +82,7 @@ Benchmarks were run on a local development environment (Linux, Loopback).
 - **Write (SET)**: TQSession outperforms Redis (~84k RPS vs ~61k RPS) in writing persistence-backed data (Periodic Sync).
 - **Read (GET)**: TQSession outperforms Redis (~144k RPS vs ~121k RPS) in reading from memory.
 - **Memory Efficiency**: TQSession uses ~8x less memory than Redis (~92MB vs ~769MB), relying on the OS disk block cache.
-- **CPU Efficiency**: TQSession uses ~3x more CPU than Redis (~4 vs ~1 core) as it is truly multi-threaded.
+- **CPU Efficiency**: TQSession uses ~3x more CPU than Redis (~4 vs ~1 core) as it is multi-threaded.
 
 ### Summary Table
 
