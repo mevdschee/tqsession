@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/mevdschee/tqsession/internal/config"
 	"github.com/mevdschee/tqsession/pkg/server"
@@ -17,15 +16,17 @@ import (
 )
 
 func main() {
+	defaults := tqsession.DefaultConfig()
+
 	configFile := flag.String("config", "", "Path to config file (INI format)")
 	listen := flag.String("listen", ":11211", "Address to listen on ([host]:port)")
-	dataDir := flag.String("data-dir", "data", "Directory for data files")
-	shards := flag.Int("shards", 16, "Number of shards for parallel access")
-	defaultTTL := flag.Duration("default-ttl", 0, "Default TTL for keys without explicit expiry (0 = no expiry)")
-	maxTTL := flag.Duration("max-ttl", 24*time.Hour, "Maximum TTL cap for any key (0 = unlimited)")
-	maxDataSize := flag.Int64("max-data-size", 0, "Maximum live data size in bytes for LRU eviction (0 = unlimited)")
+	dataDir := flag.String("data-dir", defaults.DataDir, "Directory for data files")
+	shards := flag.Int("shards", tqsession.DefaultShardCount, "Number of shards for parallel access")
+	defaultTTL := flag.Duration("default-ttl", defaults.DefaultTTL, "Default TTL for keys without explicit expiry (0 = no expiry)")
+	maxTTL := flag.Duration("max-ttl", defaults.MaxTTL, "Maximum TTL cap for any key (0 = unlimited)")
+	maxDataSize := flag.Int64("max-data-size", defaults.MaxDataSize, "Maximum live data size in bytes for LRU eviction (0 = unlimited)")
 	syncMode := flag.String("sync-mode", "periodic", "Sync mode: none, periodic, always")
-	syncInterval := flag.Duration("sync-interval", time.Second, "Sync interval for periodic fsync")
+	syncInterval := flag.Duration("sync-interval", defaults.SyncInterval, "Sync interval for periodic fsync")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [options]\n", os.Args[0])
 		flag.PrintDefaults()
@@ -53,29 +54,25 @@ func main() {
 		shardCount = fileCfg.Shards()
 		log.Printf("Loaded config from %s", *configFile)
 	} else {
-		// Use command-line flags
-		var syncStrategy tqsession.SyncStrategy
+		// Use command-line flags, starting from defaults
+		cfg = defaults
+		cfg.DataDir = *dataDir
+		cfg.DefaultTTL = *defaultTTL
+		cfg.MaxTTL = *maxTTL
+		cfg.MaxDataSize = *maxDataSize
+		cfg.SyncInterval = *syncInterval
+
 		switch *syncMode {
 		case "none":
-			syncStrategy = tqsession.SyncNone
+			cfg.SyncStrategy = tqsession.SyncNone
 		case "periodic":
-			syncStrategy = tqsession.SyncPeriodic
+			cfg.SyncStrategy = tqsession.SyncPeriodic
 		case "always":
-			syncStrategy = tqsession.SyncAlways
+			cfg.SyncStrategy = tqsession.SyncAlways
 		default:
 			log.Fatalf("Invalid sync-mode: %s (valid: none, periodic, always)", *syncMode)
 		}
 
-		cfg = tqsession.Config{
-			DataDir:      *dataDir,
-			DefaultTTL:   *defaultTTL,
-			MaxTTL:       *maxTTL,
-			MaxKeySize:   1024,             // 1KB max key size
-			MaxValueSize: 64 * 1024 * 1024, // 64MB max value size
-			MaxDataSize:  *maxDataSize,
-			SyncStrategy: syncStrategy,
-			SyncInterval: *syncInterval,
-		}
 		serverPort = *listen
 		shardCount = *shards
 	}

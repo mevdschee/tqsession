@@ -14,6 +14,13 @@ const (
 	SyncPeriodic
 )
 
+// Default configuration values (single source of truth)
+const (
+	DefaultShardCount      = 16
+	DefaultChannelCapacity = 1000
+	DefaultSyncInterval    = 1 * time.Second
+)
+
 // Config holds the configuration for TQSession
 type Config struct {
 	DataDir         string
@@ -30,14 +37,14 @@ type Config struct {
 // DefaultConfig returns sensible defaults
 func DefaultConfig() Config {
 	return Config{
-		DataDir:         "/tmp/tqsession",
-		DefaultTTL:      24 * time.Hour,
+		DataDir:         "data",
+		DefaultTTL:      0,
 		MaxTTL:          7 * 24 * time.Hour,
-		MaxKeySize:      250,
+		MaxKeySize:      1 << 10, // 1KB
 		MaxValueSize:    1 << 20, // 1MB
 		MaxDataSize:     0,       // Unlimited
 		SyncStrategy:    SyncPeriodic,
-		SyncInterval:    1 * time.Second,
-		ChannelCapacity: 1000, // Default channel capacity
+		SyncInterval:    DefaultSyncInterval,
+		ChannelCapacity: DefaultChannelCapacity,
 	}
 }

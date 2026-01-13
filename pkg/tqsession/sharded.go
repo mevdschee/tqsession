@@ -9,11 +9,6 @@ import (
 	"time"
 )
 
-const (
-	// DefaultShardCount is the default number of shards
-	DefaultShardCount = 16
-)
-
 // ShardedCache wraps multiple Worker instances for concurrent access.
 // Keys are distributed across shards using FNV-1a hash.
 // Each shard is operated by a dedicated goroutine, eliminating lock contention.

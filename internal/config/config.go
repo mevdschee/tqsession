@@ -162,14 +162,14 @@ func (c *Config) ToTQSessionConfig() (tqsession.Config, error) {
 	return cfg, nil
 }
 
-// Shards returns the configured number of shards (default 16)
+// Shards returns the configured number of shards
 func (c *Config) Shards() int {
 	if c.Storage.Shards == "" {
-		return 16
+		return tqsession.DefaultShardCount
 	}
 	n, err := strconv.Atoi(c.Storage.Shards)
 	if err != nil || n <= 0 {
-		return 16
+		return tqsession.DefaultShardCount
 	}
 	return n
 }

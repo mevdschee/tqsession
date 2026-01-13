@@ -68,7 +68,7 @@ type Worker struct {
 
 func NewWorker(storage *Storage, DefaultTTL time.Duration, maxDataSize int64, channelCapacity int) (*Worker, error) {
 	if channelCapacity <= 0 {
-		channelCapacity = 1000 // Default
+		channelCapacity = DefaultChannelCapacity
 	}
 	w := &Worker{
 		storage:      storage,
@@ -79,7 +79,7 @@ func NewWorker(storage *Storage, DefaultTTL time.Duration, maxDataSize int64, ch
 		DefaultTTL:   DefaultTTL,
 		maxDataSize:  maxDataSize,
 		lastSync:     time.Now(),
-		syncInterval: time.Second, // Default 1 second
+		syncInterval: DefaultSyncInterval,
 	}
 
 	// Recover state from disk
