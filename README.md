@@ -81,7 +81,7 @@ Benchmarks were run on a local development environment (Linux, Loopback).
 ### Performance Highlights
 - **Write (SET)**: outperforms Redis (~84k RPS vs ~61k RPS) in writing persistence-backed data (Periodic Sync).
 - **Read (GET)**: outperforms Redis (~144k RPS vs ~121k RPS) in reading from memory.
-- **Memory Efficiency**: uses ~8x less memory than Redis (~92MB vs ~769MB), relying on the OS disk block cache.
+- **Memory Efficiency**: uses ~8x less memory than Redis (~92MB vs ~769MB), uses OS disk cache.
 - **CPU Efficiency**: uses ~3x more CPU than Redis (~4 vs ~1 core) as Redis is single threaded.
 
 ### Summary Table
