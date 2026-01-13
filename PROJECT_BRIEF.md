@@ -121,7 +121,7 @@ Start at 1024 bytes and double the size for each file.
 
 Instead of free lists, uses **continuous defragmentation**:
 
-**On delete/eviction**:
+**On delete/expiry**:
 1. Move tail slot data to freed slot position
 2. Update the moved entry's index to point to new slot
 3. Truncate file by one slot
