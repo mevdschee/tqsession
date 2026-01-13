@@ -48,10 +48,6 @@ echo "Building TQSession and Benchmark Tool..."
 go build -o tqsession-server ../../cmd/tqsession
 go build -o benchmark-tool .
 
-# Output file
-OUTPUT="getset_benchmark.csv"
-echo "Mode,Backend,Protocol,Operation,RPS,TimePerReq(ms),MaxMemory(MB),CPU(%)" > $OUTPUT
-
 # Benchmark Configuration
 CLIENTS=10
 REQUESTS=100000
@@ -131,9 +127,10 @@ run_benchmark_set() {
     REDIS_FLAGS=$3
     ENABLE_MEMCACHED=$4
     REQ_COUNT=${5:-$REQUESTS}  # Use 5th param or default to REQUESTS
+    SHARD_COUNT=$6
 
     echo "==========================================================="
-    echo "Running Benchmark Mode: $SYNC_MODE (requests: $REQ_COUNT)"
+    echo "Running Benchmark Mode: $SYNC_MODE (requests: $REQ_COUNT, shards: $SHARD_COUNT)"
     echo "==========================================================="
 
     # Ensure ports are free
@@ -142,18 +139,18 @@ run_benchmark_set() {
     kill_port 11222
 
     # --- Start TQSession ---
-    echo "Starting TQSession (Sync Mode: $SYNC_MODE, Interval: $SYNC_INTERVAL)..."
+    echo "Starting TQSession (Sync Mode: $SYNC_MODE, Interval: $SYNC_INTERVAL, Shards: $SHARD_COUNT)..."
     rm -rf /tmp/tqsession-bench
     mkdir -p /tmp/tqsession-bench
     
-    # Generate config file with current sync mode
+    # Generate config file with current sync mode and shard count
     cat > /tmp/tqsession-bench.conf << CONF
 [server]
 listen = :11221
 
 [storage]
 data-dir = /tmp/tqsession-bench
-shards = 4
+shards = $SHARD_COUNT
 sync-mode = $SYNC_MODE
 sync-interval = $SYNC_INTERVAL
 max-data-size = 1GB
@@ -214,25 +211,12 @@ CONF
     if [ ! -z "$MEM_PID" ]; then wait $MEM_PID 2>/dev/null || true; fi
 }
 
-# 1. Mode: none
-run_benchmark_set "none" "1s" "--save \"\" --appendonly no" "true"
+generate_visualization() {
+    SHARD_COUNT=$1
+    CSV_FILE="getset_benchmark_${SHARD_COUNT}.csv"
+    PNG_FILE="getset_benchmark_${SHARD_COUNT}.png"
 
-# 2. Mode: periodic (1s sync)  
-run_benchmark_set "periodic" "1s" "--appendonly yes --appendfsync everysec" "false"
-
-# 3. Mode: always (fsync every write) - reduced requests for faster benchmark
-run_benchmark_set "always" "1s" "--appendonly yes --appendfsync always" "false" 10000
-
-echo "---------------------------------------------------"
-echo "Benchmark completed. Results saved to $OUTPUT"
-echo "---------------------------------------------------"
-column -s, -t $OUTPUT
-
-# Generate PNG
-echo ""
-echo "Generating visualization..."
-
-python3 << 'EOF'
+python3 << EOF
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
@@ -246,7 +230,7 @@ def annotate_bars(ax):
                         textcoords='offset points')
 
 # Load data
-df = pd.read_csv('getset_benchmark.csv')
+df = pd.read_csv('${CSV_FILE}')
 df.columns = [c.strip() for c in df.columns]
 for col in ['Mode', 'Backend', 'Protocol', 'Operation']:
     if col in df.columns:
@@ -311,11 +295,52 @@ for ax in (ax1, ax2, ax3, ax4):
     ylim = ax.get_ylim()
     ax.set_ylim(0, ylim[1] * 1.15)
 
-plt.suptitle('TQSession Performance Benchmark', fontsize=16)
+plt.suptitle('TQSession Performance Benchmark (Shards: ${SHARD_COUNT})', fontsize=16)
 plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-plt.savefig('getset_benchmark.png', dpi=150, bbox_inches='tight')
-print(f"Saved: getset_benchmark.png")
+plt.savefig('${PNG_FILE}', dpi=150, bbox_inches='tight')
+print(f"Saved: ${PNG_FILE}")
 EOF
+}
+
+# Main loop: run benchmarks for shards 1, 2, 3, 4, 6, 8
+for SHARD_COUNT in 1 2 3 4 6 8; do
+    echo ""
+    echo "###########################################################"
+    echo "# BENCHMARKING WITH $SHARD_COUNT SHARD(S)"
+    echo "###########################################################"
+    echo ""
+
+    # Output file for this shard count
+    OUTPUT="getset_benchmark_${SHARD_COUNT}.csv"
+    echo "Mode,Backend,Protocol,Operation,RPS,TimePerReq(ms),MaxMemory(MB),CPU(%)" > $OUTPUT
+
+    # 1. Mode: none
+    run_benchmark_set "none" "1s" "--save \"\" --appendonly no" "true" $REQUESTS $SHARD_COUNT
+
+    # 2. Mode: periodic (1s sync)  
+    run_benchmark_set "periodic" "1s" "--appendonly yes --appendfsync everysec" "false" $REQUESTS $SHARD_COUNT
+
+    # 3. Mode: always (fsync every write) - reduced requests for faster benchmark
+    run_benchmark_set "always" "1s" "--appendonly yes --appendfsync always" "false" 10000 $SHARD_COUNT
+
+    echo "---------------------------------------------------"
+    echo "Benchmark completed for $SHARD_COUNT shard(s). Results saved to $OUTPUT"
+    echo "---------------------------------------------------"
+    column -s, -t $OUTPUT
+
+    # Generate PNG
+    echo ""
+    echo "Generating visualization for $SHARD_COUNT shard(s)..."
+    generate_visualization $SHARD_COUNT
+done
 
 echo ""
+echo "============================================="
+echo "All benchmarks completed!"
+echo "Generated files:"
+for i in 1 2 4 8; do
+    echo "  - getset_benchmark_${i}.csv"
+    echo "  - getset_benchmark_${i}.png"
+done
+echo "============================================="
 echo "Done!"
