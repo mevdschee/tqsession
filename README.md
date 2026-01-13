@@ -6,12 +6,13 @@ with disk-based persistence, making it ideal for session storage that survives r
 ## Features
 
 - **Persistent Storage**: Data stored on disk, survives server restarts
-- **Memcached Compatible**: Works with PHP's native `memcached` session handler
-- **Feature complete**: Supports all Memcached commands, including binary protocol
-- **Continuous Defragmentation**: About 25-33% waste space on disk on average
-- **1KB Key Size**: Maximum key size is 1KB
-- **64MB Value Size**: Maximum value size is 64MB
+- **Efficient Storage**: About 25-33% waste space on disk on average
+- **Faster than Redis**: About 2x faster than Redis in typical cases
+- **Memcached Compatible**: Supports all Memcached commands, including binary protocol
+- **Session Storage**: Ideal for PHP's native `memcached` session handler
+- **Generous Limits**: Maximum key size is 1KB / Maximum value size is 64MB
 - **Eviction Optional**: Set `max-data-size = 0` to disable eviction
+- **TTL Enforcement**: Maximum TTL defaults to 24 hours (set to 0 to disable)
 
 ## Requirements
 
