@@ -7,7 +7,7 @@ with disk-based persistence, making it ideal for session storage that survives r
 
 - **Persistent Storage**: Data stored on disk, survives server restarts
 - **Memcached Compatible**: Works with PHP's native `memcached` session handler
-- **Protocol Support**: Both Memcached text and binary protocols
+- **Feature complete**: Supports all Memcached commands
 - **Continuous Defragmentation**: Always compact files on disk
 
 ## Requirements
