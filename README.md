@@ -11,6 +11,7 @@ with disk-based persistence, making it ideal for session storage that survives r
 - **Faster than Redis**: About 2x faster than Redis in typical cases
 - **Memcached Compatible**: Supports all Memcached commands, including binary protocol
 - **TTL Enforcement**: Maximum TTL defaults to 24 hours (set to 0 to disable)
+- **No Eviction**: No LRU eviction support; Use max-ttl to limit diskspace usage
 
 ## Requirements
 
@@ -74,18 +75,18 @@ Benchmarks were run on a local development environment (Linux, Loopback).
 ![Performance Benchmark](benchmarks/getset/getset_benchmark_16.png)
 
 ### Performance Highlights
-- **Write (SET)**: outperforms Redis (~85k RPS vs ~59k RPS) in writing persistence-backed data (Periodic Sync).
-- **Read (GET)**: outperforms Redis (~143k RPS vs ~121k RPS) in reading from memory.
-- **Memory Efficiency**: uses ~10x less memory than Redis (~72MB vs ~768MB), uses OS disk cache.
+- **Write (SET)**: outperforms Redis (~87k RPS vs ~61k RPS) in writing persistence-backed data (Periodic Sync).
+- **Read (GET)**: outperforms Redis (~146k RPS vs ~108k RPS) in reading from memory.
+- **Memory Efficiency**: uses ~14x less memory than Redis (~55MB vs ~768MB), uses OS disk cache.
 - **CPU Efficiency**: uses ~4x more CPU than Redis (~4 vs ~1 core) as Redis is single threaded.
 
 ### Summary Table
 
 | Reference | SET (RPS) | GET (RPS) | Memory (MB) | CPU Usage |
 | :--- | :--- | :--- | :--- | :--- |
-| **Memcached** (Memory) | ~145k | ~302k | ~680MB | ~3 core |
-| **Redis** (Periodic) | ~59k | ~121k | ~768MB | ~1 core |
-| **TQCache** (Periodic) | ~85k | ~143k | ~72MB | ~4 core |
+| **Memcached** (Memory) | ~124k | ~212k | ~680MB | ~2 core |
+| **Redis** (Periodic) | ~61k | ~108k | ~768MB | ~1 core |
+| **TQCache** (Periodic) | ~87k | ~146k | ~55MB | ~4 core |
 
 NB: The maximum amount of cores used can be calculated as: shards / 4
 
