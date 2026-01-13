@@ -88,9 +88,9 @@ Benchmarks were run on a local development environment (Linux, Loopback).
 
 | Reference | SET (RPS) | GET (RPS) | Memory (MB) | CPU Usage |
 | :--- | :--- | :--- | :--- | :--- |
-| **Memcached** (Memory) | ~138k | ~303k | ~681MB | ~3 core |
-| **Redis** (Periodic) | ~52k | ~110k | ~766MB | ~1 core |
-| **TQSession** (Periodic) | ~104k | ~167k | ~54MB | ~4 core |
+| **Memcached** (Memory) | ~139k | ~296 | ~680MB | ~3 core |
+| **Redis** (Periodic) | ~61k | ~121k | ~769MB | ~1 core |
+| **TQSession** (Periodic) | ~84k | ~144k | ~92MB | ~4 core |
 
 NB: the amount of cores used can be calculated as: shards / 4
 
