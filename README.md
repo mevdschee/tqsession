@@ -41,7 +41,7 @@ tqcache [options]
 
 | Flag             | Default     | Description                                                    |
 |------------------|-------------|----------------------------------------------------------------|
-| `-config`        |             | Path to INI config file (overrides other flags)                |
+| `-config`        |             | Path to INI config file (overrides flags), (see [tqcache.conf](cmd/tqcache/tqcache.conf))                |
 | `-listen`        | `:11211`    | Address to listen on (`[host]:port`)                           |
 | `-data-dir`      | `data`      | Directory for persistent data files                            |
 | `-shards`        | `16`        | Number of shards for parallel processing                       |
@@ -52,8 +52,6 @@ tqcache [options]
 | `-sync-interval` | `1s`        | Interval between fsync calls (when periodic)                   |
 
 **Fixed limits:** Max key size is 1KB. Max value size is 64MB.
-
-NB: You may also use a config file instead of CLI flags (see [tqcache.conf](cmd/tqcache/tqcache.conf)).
 
 ## PHP Configuration
 
