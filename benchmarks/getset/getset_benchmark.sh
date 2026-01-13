@@ -58,8 +58,6 @@ REQUESTS=100000
 SIZE=10240
 KEYS=100000
 
-export GOMAXPROCS=2
-
 # Get CPU time (user + system) from /proc/PID/stat in jiffies
 get_cpu_time() {
     PID=$1
@@ -155,7 +153,7 @@ listen = :11221
 
 [storage]
 data-dir = /tmp/tqsession-bench
-shards = 16
+shards = 4
 sync-mode = $SYNC_MODE
 sync-interval = $SYNC_INTERVAL
 max-data-size = 1GB

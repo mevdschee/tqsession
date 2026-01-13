@@ -5,6 +5,7 @@ import (
 	"hash/fnv"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 )
 
@@ -13,57 +14,82 @@ const (
 	DefaultShardCount = 16
 )
 
-// ShardedCache wraps multiple Cache instances for concurrent access.
+// ShardedCache wraps multiple Worker instances for concurrent access.
 // Keys are distributed across shards using FNV-1a hash.
+// Each shard is operated by a dedicated goroutine, eliminating lock contention.
 type ShardedCache struct {
-	shards    []*Cache
+	workers   []*Worker
 	config    Config
+	syncChan  chan int // Channel for sync requests (worker index)
 	stopSync  chan struct{}
 	StartTime time.Time
 }
 
 // NewSharded creates a new sharded cache with the number of shards from config.
-// Each shard gets its own subfolder (shard_00, shard_01, ...).
+// Each shard gets its own subfolder (shard_00, shard_01, ...) and a dedicated worker goroutine.
 func NewSharded(cfg Config, shardCount int) (*ShardedCache, error) {
 	if shardCount <= 0 {
 		shardCount = DefaultShardCount
 	}
 
+	// Set GOMAXPROCS to match shard count for optimal parallelism
+	runtime.GOMAXPROCS(shardCount)
+
 	sc := &ShardedCache{
-		shards:    make([]*Cache, shardCount),
+		workers:   make([]*Worker, shardCount),
 		config:    cfg,
+		syncChan:  make(chan int, shardCount*2), // Buffered to avoid blocking workers
 		stopSync:  make(chan struct{}),
 		StartTime: time.Now(),
 	}
 
-	// Create a shard for each index
+	// Create a worker for each shard
 	for i := 0; i < shardCount; i++ {
 		shardDir := filepath.Join(cfg.DataDir, fmt.Sprintf("shard_%02d", i))
 		if err := os.MkdirAll(shardDir, 0755); err != nil {
 			// Cleanup on failure
 			for j := 0; j < i; j++ {
-				sc.shards[j].Close()
+				sc.workers[j].Close()
 			}
 			return nil, fmt.Errorf("failed to create shard dir %d: %w", i, err)
 		}
 
-		shardCfg := cfg
-		shardCfg.DataDir = shardDir
-		// For SyncPeriodic: disable per-shard workers, run one at top level
-		// For SyncAlways: keep it so fsync happens after every write
-		// For SyncNone: keep as-is
-		if cfg.SyncStrategy == SyncPeriodic {
-			shardCfg.SyncStrategy = SyncNone // Disable per-shard sync worker
-		}
-
-		shard, err := New(shardCfg)
+		// Create storage for this shard
+		storage, err := NewStorage(shardDir, cfg.SyncStrategy == SyncAlways)
 		if err != nil {
 			for j := 0; j < i; j++ {
-				sc.shards[j].Close()
+				sc.workers[j].Close()
 			}
-			return nil, fmt.Errorf("failed to create shard %d: %w", i, err)
+			return nil, fmt.Errorf("failed to create storage for shard %d: %w", i, err)
 		}
-		sc.shards[i] = shard
+
+		// Create worker with storage
+		worker, err := NewWorker(storage, cfg.DefaultTTL, cfg.MaxDataSize/int64(shardCount))
+		if err != nil {
+			storage.Close()
+			for j := 0; j < i; j++ {
+				sc.workers[j].Close()
+			}
+			return nil, fmt.Errorf("failed to create worker for shard %d: %w", i, err)
+		}
+
+		// Set up sync notification for periodic mode
+		if cfg.SyncStrategy == SyncPeriodic {
+			workerIdx := i // Capture for closure
+			worker.SetSyncInterval(cfg.SyncInterval)
+			worker.SetSyncNotify(func() {
+				// Non-blocking send to sync channel
+				select {
+				case sc.syncChan <- workerIdx:
+				default:
+					// Channel full, sync already pending
+				}
+			})
+		}
+
+		// Start the worker goroutine
+		worker.Start()
+		sc.workers[i] = worker
 	}
 
 	// Start sync worker if periodic
@@ -78,99 +104,176 @@ func NewSharded(cfg Config, shardCount int) (*ShardedCache, error) {
 func (sc *ShardedCache) shardFor(key string) int {
 	h := fnv.New32a()
 	h.Write([]byte(key))
-	return int(h.Sum32()) % len(sc.shards)
+	return int(h.Sum32()) % len(sc.workers)
 }
 
+// runSyncWorker processes sync requests from workers
 func (sc *ShardedCache) runSyncWorker() {
-	ticker := time.NewTicker(sc.config.SyncInterval)
-	defer ticker.Stop()
-
 	for {
 		select {
-		case <-ticker.C:
-			for _, shard := range sc.shards {
-				shard.storage.Sync()
-			}
+		case workerIdx := <-sc.syncChan:
+			worker := sc.workers[workerIdx]
+			worker.Sync()
+			worker.MarkSynced()
 		case <-sc.stopSync:
 			return
 		}
 	}
 }
 
-// Close closes all shards.
+// Close closes all workers.
 func (sc *ShardedCache) Close() error {
 	if sc.config.SyncStrategy == SyncPeriodic {
 		close(sc.stopSync)
 	}
 
 	var err error
-	for _, shard := range sc.shards {
-		if e := shard.Close(); e != nil {
+	for _, worker := range sc.workers {
+		if e := worker.Close(); e != nil {
 			err = e
 		}
 	}
 	return err
 }
 
+// sendRequest sends a request to the appropriate worker and waits for response.
+func (sc *ShardedCache) sendRequest(shardIdx int, req *Request) *Response {
+	req.RespChan = make(chan *Response, 1)
+	sc.workers[shardIdx].RequestChan() <- req
+	return <-req.RespChan
+}
+
 // Get retrieves a value from the cache.
 func (sc *ShardedCache) Get(key string) ([]byte, uint64, error) {
-	return sc.shards[sc.shardFor(key)].Get(key)
+	resp := sc.sendRequest(sc.shardFor(key), &Request{
+		Op:  OpGet,
+		Key: key,
+	})
+	return resp.Value, resp.Cas, resp.Err
 }
 
 // Set stores a value in the cache.
 func (sc *ShardedCache) Set(key string, value []byte, ttl time.Duration) (uint64, error) {
-	return sc.shards[sc.shardFor(key)].Set(key, value, ttl)
+	resp := sc.sendRequest(sc.shardFor(key), &Request{
+		Op:    OpSet,
+		Key:   key,
+		Value: value,
+		TTL:   ttl,
+	})
+	return resp.Cas, resp.Err
 }
 
 // Add stores a value only if it doesn't already exist.
 func (sc *ShardedCache) Add(key string, value []byte, ttl time.Duration) (uint64, error) {
-	return sc.shards[sc.shardFor(key)].Add(key, value, ttl)
+	resp := sc.sendRequest(sc.shardFor(key), &Request{
+		Op:    OpAdd,
+		Key:   key,
+		Value: value,
+		TTL:   ttl,
+	})
+	return resp.Cas, resp.Err
 }
 
 // Replace stores a value only if it already exists.
 func (sc *ShardedCache) Replace(key string, value []byte, ttl time.Duration) (uint64, error) {
-	return sc.shards[sc.shardFor(key)].Replace(key, value, ttl)
+	resp := sc.sendRequest(sc.shardFor(key), &Request{
+		Op:    OpReplace,
+		Key:   key,
+		Value: value,
+		TTL:   ttl,
+	})
+	return resp.Cas, resp.Err
 }
 
 // Cas stores a value only if CAS matches.
 func (sc *ShardedCache) Cas(key string, value []byte, ttl time.Duration, cas uint64) (uint64, error) {
-	return sc.shards[sc.shardFor(key)].Cas(key, value, ttl, cas)
+	resp := sc.sendRequest(sc.shardFor(key), &Request{
+		Op:    OpCas,
+		Key:   key,
+		Value: value,
+		TTL:   ttl,
+		Cas:   cas,
+	})
+	return resp.Cas, resp.Err
 }
 
 // Delete removes a key from the cache.
 func (sc *ShardedCache) Delete(key string) error {
-	return sc.shards[sc.shardFor(key)].Delete(key)
+	resp := sc.sendRequest(sc.shardFor(key), &Request{
+		Op:  OpDelete,
+		Key: key,
+	})
+	return resp.Err
 }
 
 // Touch updates the TTL of an existing item.
 func (sc *ShardedCache) Touch(key string, ttl time.Duration) (uint64, error) {
-	return sc.shards[sc.shardFor(key)].Touch(key, ttl)
+	resp := sc.sendRequest(sc.shardFor(key), &Request{
+		Op:  OpTouch,
+		Key: key,
+		TTL: ttl,
+	})
+	return resp.Cas, resp.Err
 }
 
 // Increment increments a numeric value.
 func (sc *ShardedCache) Increment(key string, delta uint64) (uint64, uint64, error) {
-	return sc.shards[sc.shardFor(key)].Increment(key, delta)
+	resp := sc.sendRequest(sc.shardFor(key), &Request{
+		Op:    OpIncr,
+		Key:   key,
+		Delta: delta,
+	})
+	// Parse value as uint64
+	var val uint64
+	for _, b := range resp.Value {
+		if b >= '0' && b <= '9' {
+			val = val*10 + uint64(b-'0')
+		}
+	}
+	return val, resp.Cas, resp.Err
 }
 
 // Decrement decrements a numeric value.
 func (sc *ShardedCache) Decrement(key string, delta uint64) (uint64, uint64, error) {
-	return sc.shards[sc.shardFor(key)].Decrement(key, delta)
+	resp := sc.sendRequest(sc.shardFor(key), &Request{
+		Op:    OpDecr,
+		Key:   key,
+		Delta: delta,
+	})
+	// Parse value as uint64
+	var val uint64
+	for _, b := range resp.Value {
+		if b >= '0' && b <= '9' {
+			val = val*10 + uint64(b-'0')
+		}
+	}
+	return val, resp.Cas, resp.Err
 }
 
 // Append appends data to an existing value.
 func (sc *ShardedCache) Append(key string, value []byte) (uint64, error) {
-	return sc.shards[sc.shardFor(key)].Append(key, value)
+	resp := sc.sendRequest(sc.shardFor(key), &Request{
+		Op:    OpAppend,
+		Key:   key,
+		Value: value,
+	})
+	return resp.Cas, resp.Err
 }
 
 // Prepend prepends data to an existing value.
 func (sc *ShardedCache) Prepend(key string, value []byte) (uint64, error) {
-	return sc.shards[sc.shardFor(key)].Prepend(key, value)
+	resp := sc.sendRequest(sc.shardFor(key), &Request{
+		Op:    OpPrepend,
+		Key:   key,
+		Value: value,
+	})
+	return resp.Cas, resp.Err
 }
 
 // FlushAll invalidates all items.
 func (sc *ShardedCache) FlushAll() {
-	for _, shard := range sc.shards {
-		shard.FlushAll()
+	for i := range sc.workers {
+		sc.sendRequest(i, &Request{Op: OpFlushAll})
 	}
 }
 
@@ -179,9 +282,9 @@ func (sc *ShardedCache) Stats() map[string]string {
 	totalItems := 0
 	totalBytes := int64(0)
 
-	for _, shard := range sc.shards {
-		totalItems += shard.index.Count()
-		totalBytes += shard.liveDataSize
+	for _, worker := range sc.workers {
+		totalItems += worker.Index().Count()
+		totalBytes += worker.LiveDataSize()
 	}
 
 	stats := make(map[string]string)
@@ -193,8 +296,8 @@ func (sc *ShardedCache) Stats() map[string]string {
 // LiveDataSize returns the total live data size across all shards.
 func (sc *ShardedCache) LiveDataSize() int64 {
 	var total int64
-	for _, shard := range sc.shards {
-		total += shard.LiveDataSize()
+	for _, worker := range sc.workers {
+		total += worker.LiveDataSize()
 	}
 	return total
 }

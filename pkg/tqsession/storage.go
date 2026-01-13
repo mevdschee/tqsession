@@ -56,7 +56,7 @@ type Storage struct {
 	dataFiles  [NumBuckets]*os.File
 	syncAlways bool // If true, fsync after every write
 
-	// RWMutexes for concurrent access
+	// RWMutexes for concurrent access (used by lock-based Cache)
 	keysMu sync.RWMutex             // Protects keys file
 	dataMu [NumBuckets]sync.RWMutex // Per-bucket data file locks
 

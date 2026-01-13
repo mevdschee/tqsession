@@ -59,17 +59,24 @@ type Worker struct {
 	DefaultTTL   time.Duration
 	maxDataSize  int64 // Maximum live data size (0 = unlimited)
 	liveDataSize int64 // Current live data size in bytes
+
+	// Sync tracking for periodic mode
+	lastSync     time.Time
+	syncInterval time.Duration
+	syncNotify   func() // Called when sync is needed
 }
 
 func NewWorker(storage *Storage, DefaultTTL time.Duration, maxDataSize int64) (*Worker, error) {
 	w := &Worker{
-		storage:     storage,
-		index:       NewIndex(),
-		reqChan:     make(chan *Request, 1000),
-		stopChan:    make(chan struct{}),
-		startTime:   time.Now(),
-		DefaultTTL:  DefaultTTL,
-		maxDataSize: maxDataSize,
+		storage:      storage,
+		index:        NewIndex(),
+		reqChan:      make(chan *Request, 1000),
+		stopChan:     make(chan struct{}),
+		startTime:    time.Now(),
+		DefaultTTL:   DefaultTTL,
+		maxDataSize:  maxDataSize,
+		lastSync:     time.Now(),
+		syncInterval: time.Second, // Default 1 second
 	}
 
 	// Recover state from disk
@@ -160,6 +167,31 @@ func (w *Worker) RequestChan() chan *Request {
 	return w.reqChan
 }
 
+// SetSyncNotify sets the callback for sync notifications
+func (w *Worker) SetSyncNotify(notify func()) {
+	w.syncNotify = notify
+}
+
+// SetSyncInterval sets the sync interval
+func (w *Worker) SetSyncInterval(interval time.Duration) {
+	w.syncInterval = interval
+}
+
+// checkSync checks if sync is needed and triggers it if so
+func (w *Worker) checkSync() {
+	if w.syncNotify == nil {
+		return
+	}
+	if time.Since(w.lastSync) >= w.syncInterval {
+		w.syncNotify()
+	}
+}
+
+// MarkSynced updates the last sync time
+func (w *Worker) MarkSynced() {
+	w.lastSync = time.Now()
+}
+
 func (w *Worker) run() {
 	defer w.wg.Done()
 
@@ -246,7 +278,9 @@ func (w *Worker) handleGet(req *Request) *Response {
 }
 
 func (w *Worker) handleSet(req *Request) *Response {
-	return w.doSet(req.Key, req.Value, req.TTL, 0, false)
+	resp := w.doSet(req.Key, req.Value, req.TTL, 0, false)
+	w.checkSync()
+	return resp
 }
 
 func (w *Worker) handleAdd(req *Request) *Response {
@@ -254,7 +288,9 @@ func (w *Worker) handleAdd(req *Request) *Response {
 	if _, ok := w.index.Get(req.Key); ok {
 		return &Response{Err: ErrKeyExists}
 	}
-	return w.doSet(req.Key, req.Value, req.TTL, 0, false)
+	resp := w.doSet(req.Key, req.Value, req.TTL, 0, false)
+	w.checkSync()
+	return resp
 }
 
 func (w *Worker) handleReplace(req *Request) *Response {
@@ -262,7 +298,9 @@ func (w *Worker) handleReplace(req *Request) *Response {
 	if _, ok := w.index.Get(req.Key); !ok {
 		return &Response{Err: ErrKeyNotFound}
 	}
-	return w.doSet(req.Key, req.Value, req.TTL, 0, false)
+	resp := w.doSet(req.Key, req.Value, req.TTL, 0, false)
+	w.checkSync()
+	return resp
 }
 
 func (w *Worker) handleCas(req *Request) *Response {
@@ -273,7 +311,9 @@ func (w *Worker) handleCas(req *Request) *Response {
 	if entry.Cas != req.Cas {
 		return &Response{Err: ErrCasMismatch}
 	}
-	return w.doSet(req.Key, req.Value, req.TTL, 0, false)
+	resp := w.doSet(req.Key, req.Value, req.TTL, 0, false)
+	w.checkSync()
+	return resp
 }
 
 func (w *Worker) doSet(key string, value []byte, ttl time.Duration, existingCas uint64, checkCas bool) *Response {
@@ -386,6 +426,7 @@ func (w *Worker) handleDelete(req *Request) *Response {
 	}
 
 	w.deleteEntry(entry)
+	w.checkSync()
 	return &Response{}
 }
 
@@ -506,6 +547,7 @@ func (w *Worker) handleTouch(req *Request) *Response {
 	entry.Expiry = expiry
 	w.index.Set(entry)
 
+	w.checkSync()
 	return &Response{Cas: entry.Cas}
 }
 
@@ -585,6 +627,7 @@ func (w *Worker) doIncrDecr(key string, delta uint64, incr bool) *Response {
 	entry.Length = len(newData)
 	w.index.Set(entry)
 
+	w.checkSync()
 	return &Response{Value: newData, Cas: entry.Cas}
 }
 
@@ -648,6 +691,7 @@ func (w *Worker) doAppendPrepend(key string, value []byte, append bool) *Respons
 	entry.Length = len(newData)
 	w.index.Set(entry)
 
+	w.checkSync()
 	return &Response{Cas: entry.Cas}
 }
 
@@ -668,6 +712,7 @@ func (w *Worker) handleFlushAll(req *Request) *Response {
 		w.nextSlotId[i] = 0
 	}
 
+	w.checkSync()
 	return &Response{}
 }
 
@@ -755,4 +800,25 @@ func (w *Worker) lruEvict() {
 // LiveDataSize returns the current live data size in bytes
 func (w *Worker) LiveDataSize() int64 {
 	return w.liveDataSize
+}
+
+// Sync syncs the worker's storage to disk
+func (w *Worker) Sync() error {
+	return w.storage.Sync()
+}
+
+// Storage returns the worker's storage for direct access
+func (w *Worker) Storage() *Storage {
+	return w.storage
+}
+
+// Index returns the worker's index for stats access
+func (w *Worker) Index() *Index {
+	return w.index
+}
+
+// Close stops the worker and closes storage
+func (w *Worker) Close() error {
+	w.Stop()
+	return w.storage.Close()
 }
