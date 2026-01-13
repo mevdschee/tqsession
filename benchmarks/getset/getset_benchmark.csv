@@ -5,3 +5,11 @@ none,Redis,redis,SET,90169.74,0.0111,768,98
 none,Redis,redis,GET,115276.07,0.0087,768,98
 none,Memcached,memcache,SET,138453.71,0.0072,681,268
 none,Memcached,memcache,GET,291493.52,0.0034,681,268
+periodic,TQSession,memcache,SET,48449.07,0.0206,91,200
+periodic,TQSession,memcache,GET,77178.24,0.0130,91,200
+periodic,Redis,redis,SET,48716.47,0.0205,785,102
+periodic,Redis,redis,GET,115451.08,0.0087,785,102
+always,TQSession,memcache,SET,1005.49,0.9945,17,20
+always,TQSession,memcache,GET,152385.78,0.0066,17,20
+always,Redis,redis,SET,6706.67,0.1491,809,26
+always,Redis,redis,GET,99974.52,0.0100,809,26
