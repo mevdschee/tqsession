@@ -27,7 +27,7 @@ cleanup() {
 
     rm -rf /tmp/tqsession-bench
     rm -rf /tmp/redis-bench
-    rm -f max_rss.tmp results.tmp
+    rm -f max_rss.tmp cpu_start.tmp cpu_time.tmp results.tmp
     rm -f tqsession-server benchmark-tool
     rm -f redis_bench.log
 }
@@ -50,7 +50,7 @@ go build -o benchmark-tool .
 
 # Output file
 OUTPUT="getset_benchmark.csv"
-echo "Mode,Backend,Protocol,Operation,RPS,TimePerReq(ms),MaxMemory(MB)" > $OUTPUT
+echo "Mode,Backend,Protocol,Operation,RPS,TimePerReq(ms),MaxMemory(MB),CPU(%)" > $OUTPUT
 
 # Benchmark Configuration
 CLIENTS=10
@@ -58,10 +58,26 @@ REQUESTS=100000
 SIZE=10240
 KEYS=100000
 
-# Function to monitor max RSS of a PID
+export GOMAXPROCS=2
+
+# Get CPU time (user + system) from /proc/PID/stat in jiffies
+get_cpu_time() {
+    PID=$1
+    if [ -f /proc/$PID/stat ]; then
+        # Fields 14 and 15 are utime and stime in jiffies
+        awk '{print $14 + $15}' /proc/$PID/stat 2>/dev/null || echo 0
+    else
+        echo 0
+    fi
+}
+
+# Function to monitor max RSS of a PID and track CPU time
 start_monitor() {
     PID=$1
     echo 0 > max_rss.tmp
+    # Record start CPU time and wall clock
+    get_cpu_time $PID > cpu_start.tmp
+    echo $(date +%s%N) >> cpu_start.tmp
     (
         while true; do
             if ! kill -0 $PID 2>/dev/null; then break; fi
@@ -79,12 +95,36 @@ start_monitor() {
 }
 
 stop_monitor() {
+    MONITOR_TARGET_PID=$1
     if [ ! -z "$MONITOR_PID" ]; then
         kill $MONITOR_PID 2>/dev/null || true
         wait $MONITOR_PID 2>/dev/null || true
     fi
+    
+    # Get max memory
     MAX_KB=$(cat max_rss.tmp)
-    echo $((MAX_KB / 1024))
+    MAX_MB=$((MAX_KB / 1024))
+    
+    # Calculate CPU percentage
+    CPU_START=$(head -1 cpu_start.tmp)
+    TIME_START=$(tail -1 cpu_start.tmp)
+    CPU_END=$(get_cpu_time $MONITOR_TARGET_PID)
+    TIME_END=$(date +%s%N)
+    
+    # CPU time in jiffies (typically 100 Hz = 10ms per jiffy)
+    CPU_JIFFIES=$((CPU_END - CPU_START))
+    # Wall time in nanoseconds, convert to centiseconds (100ths of a second, same as jiffies at 100Hz)
+    WALL_NS=$((TIME_END - TIME_START))
+    WALL_CS=$((WALL_NS / 10000000))
+    
+    if [ "$WALL_CS" -gt 0 ]; then
+        # CPU percentage = (cpu_jiffies / wall_centiseconds) * 100
+        CPU_PCT=$((CPU_JIFFIES * 100 / WALL_CS))
+    else
+        CPU_PCT=0
+    fi
+    
+    echo "$MAX_MB,$CPU_PCT"
 }
 
 run_benchmark_set() {
@@ -92,9 +132,10 @@ run_benchmark_set() {
     SYNC_INTERVAL=$2
     REDIS_FLAGS=$3
     ENABLE_MEMCACHED=$4
+    REQ_COUNT=${5:-$REQUESTS}  # Use 5th param or default to REQUESTS
 
     echo "==========================================================="
-    echo "Running Benchmark Mode: $SYNC_MODE"
+    echo "Running Benchmark Mode: $SYNC_MODE (requests: $REQ_COUNT)"
     echo "==========================================================="
 
     # Ensure ports are free
@@ -146,24 +187,24 @@ CONF
     # TQSession
     echo "Benchmarking TQSession..."
     start_monitor $TQ_PID
-    ./benchmark-tool -host localhost:11221 -protocol memcache -label "TQSession" -mode "$SYNC_MODE" -clients $CLIENTS -requests $REQUESTS -size $SIZE -keys $KEYS -csv > results.tmp
-    MEM_MB=$(stop_monitor)
-    awk -v mem="$MEM_MB" '{print $0 "," mem}' results.tmp >> $OUTPUT
+    ./benchmark-tool -host localhost:11221 -protocol memcache -label "TQSession" -mode "$SYNC_MODE" -clients $CLIENTS -requests $REQ_COUNT -size $SIZE -keys $KEYS -csv > results.tmp
+    STATS=$(stop_monitor $TQ_PID)
+    awk -v stats="$STATS" '{print $0 "," stats}' results.tmp >> $OUTPUT
 
     # Redis
     echo "Benchmarking Redis..."
     start_monitor $REDIS_PID
-    ./benchmark-tool -host localhost:6380 -protocol redis -label "Redis" -mode "$SYNC_MODE" -clients $CLIENTS -requests $REQUESTS -size $SIZE -keys $KEYS -csv > results.tmp
-    MEM_MB=$(stop_monitor)
-    awk -v mem="$MEM_MB" '{print $0 "," mem}' results.tmp >> $OUTPUT
+    ./benchmark-tool -host localhost:6380 -protocol redis -label "Redis" -mode "$SYNC_MODE" -clients $CLIENTS -requests $REQ_COUNT -size $SIZE -keys $KEYS -csv > results.tmp
+    STATS=$(stop_monitor $REDIS_PID)
+    awk -v stats="$STATS" '{print $0 "," stats}' results.tmp >> $OUTPUT
 
     # Memcached
     if [ "$ENABLE_MEMCACHED" = "true" ]; then
         echo "Benchmarking Memcached..."
         start_monitor $MEM_PID
-        ./benchmark-tool -host localhost:11222 -protocol memcache -label "Memcached" -mode "$SYNC_MODE" -clients $CLIENTS -requests $REQUESTS -size $SIZE -keys $KEYS -csv > results.tmp
-        MEM_MB=$(stop_monitor)
-        awk -v mem="$MEM_MB" '{print $0 "," mem}' results.tmp >> $OUTPUT
+        ./benchmark-tool -host localhost:11222 -protocol memcache -label "Memcached" -mode "$SYNC_MODE" -clients $CLIENTS -requests $REQ_COUNT -size $SIZE -keys $KEYS -csv > results.tmp
+        STATS=$(stop_monitor $MEM_PID)
+        awk -v stats="$STATS" '{print $0 "," stats}' results.tmp >> $OUTPUT
     fi
 
     # Cleanup processes for next round
@@ -181,8 +222,8 @@ run_benchmark_set "none" "1s" "--save \"\" --appendonly no" "true"
 # 2. Mode: periodic (1s sync)  
 run_benchmark_set "periodic" "1s" "--appendonly yes --appendfsync everysec" "false"
 
-# 3. Mode: always (fsync every write)
-run_benchmark_set "always" "1s" "--appendonly yes --appendfsync always" "false"
+# 3. Mode: always (fsync every write) - reduced requests for faster benchmark
+run_benchmark_set "always" "1s" "--appendonly yes --appendfsync always" "false" 10000
 
 echo "---------------------------------------------------"
 echo "Benchmark completed. Results saved to $OUTPUT"
@@ -226,10 +267,14 @@ read_pivot = read_df.pivot(index='Mode', columns='Backend', values='RPS')
 mem_df = df[(df['Operation'] == 'SET') & (df['Mode'] == 'none')]
 mem_pivot = mem_df.pivot(index='Mode', columns='Backend', values='MaxMemory(MB)')
 
-# Plotting
-fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6), gridspec_kw={'width_ratios': [3, 1, 1]})
+cpu_df = df[(df['Operation'] == 'SET') & (df['Mode'] == 'none')]
+cpu_pivot = cpu_df.pivot(index='Mode', columns='Backend', values='CPU(%)')
 
-# Plot 1: Write Performance
+# Plotting - 2x2 grid
+fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(14, 10))
+
+# Top row: Performance
+# Plot 1: Write Performance (SET)
 write_pivot.plot(kind='bar', ax=ax1, width=0.9, rot=0, legend=True)
 ax1.set_title('Write Performance (SET)')
 ax1.set_ylabel('Requests Per Second (RPS)')
@@ -238,13 +283,15 @@ ax1.grid(axis='y', linestyle='--', alpha=0.7)
 ax1.legend(title='Backend', loc='upper right')
 annotate_bars(ax1)
 
-# Plot 2: Read Performance
+# Plot 2: Read Performance (GET)
 read_pivot.plot(kind='bar', ax=ax2, width=0.9, rot=0, legend=False)
 ax2.set_title('Read Performance (GET)')
+ax2.set_ylabel('Requests Per Second (RPS)')
 ax2.set_xlabel('Persistence Mode')
 ax2.grid(axis='y', linestyle='--', alpha=0.7)
 annotate_bars(ax2)
 
+# Bottom row: Resource Usage
 # Plot 3: Memory Usage
 mem_pivot.plot(kind='bar', ax=ax3, width=0.9, rot=0, legend=False)
 ax3.set_title('Peak Memory Usage')
@@ -253,8 +300,16 @@ ax3.set_xlabel('Persistence Mode')
 ax3.grid(axis='y', linestyle='--', alpha=0.7)
 annotate_bars(ax3)
 
+# Plot 4: CPU Usage
+cpu_pivot.plot(kind='bar', ax=ax4, width=0.9, rot=0, legend=False)
+ax4.set_title('CPU Usage')
+ax4.set_ylabel('CPU (%)')
+ax4.set_xlabel('Persistence Mode')
+ax4.grid(axis='y', linestyle='--', alpha=0.7)
+annotate_bars(ax4)
+
 # Increase y-limit to fit vertical labels
-for ax in (ax1, ax2, ax3):
+for ax in (ax1, ax2, ax3, ax4):
     ylim = ax.get_ylim()
     ax.set_ylim(0, ylim[1] * 1.15)
 
