@@ -54,7 +54,7 @@ tqcache [options]
 
 **Fixed limits:** Max key size is 1KB, max value size is 64MB.
 
-NB: You may also use a config file instead of CLI flags (see [cmd/tqcache/tqcache.conf](cmd/tqcache/tqcache.conf)).
+NB: You may also use a config file instead of CLI flags (see [tqcache.conf](cmd/tqcache/tqcache.conf)).
 
 ## PHP Configuration
 
