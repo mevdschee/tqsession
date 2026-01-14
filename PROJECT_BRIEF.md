@@ -79,16 +79,17 @@ Create 16 data files each holding a different size bucket. Start at 1024 bytes
 and double the size for each file.
 
 ```
-┌──────────┬────────────────────┬───────────────────┐
-│  length  │        data        │      unused       │
-│ 4 bytes  │   [length] bytes   │ [slotSize-length] │
-└──────────┴────────────────────┴───────────────────┘
+┌──────────┬────────────────────┬─────────────────────┐
+│  length  │        data        │        unused       │
+│ 4 bytes  │   [length] bytes   │ [bucketSize-length] │
+└──────────┴────────────────────┴─────────────────────┘
 ```
 
-| Field    | Size        | Description                           |
-| -------- | ----------- | ------------------------------------- |
-| `length` | 4 bytes     | Data length (uint32), max bucket size |
-| `data`   | bucket size | Raw value bytes                       |
+| Field    | Size              | Description                           |
+| -------- | ----------------- | ------------------------------------- |
+| `length` | 4 bytes           | Data length (uint32), max bucket size |
+| `data`   | length            | Raw value bytes                       |
+| `unused` | bucketSize-length | Unused slot space                     |
 
 **Slot sizes**: Total slot = `4 + bucket_size` bytes. Buckets: 1KB, 2KB, ...,
 64MB.
