@@ -20,16 +20,17 @@ import (
 
 var (
 	host       = flag.String("host", "localhost:11211", "Host to benchmark")
-	protocol   = flag.String("protocol", "memcache", "Protocol to use: memcache or redis")
+	protocol   = flag.String("protocol", "memc-txt", "Protocol: memc-txt, memc-bin, or redis")
 	csvOutput  = flag.Bool("csv", false, "Output results in CSV format")
 	label      = flag.String("label", "Target", "Label for the backend (used in CSV)")
 	mode       = flag.String("mode", "default", "Sync mode label (used in CSV)")
 	clients    = flag.Int("clients", 10, "Number of concurrent clients")
 	requests   = flag.Int("requests", 100000, "Total number of requests")
 	valueSize  = flag.Int("size", 1024, "Value size in bytes")
-	keys       = flag.Int("keys", 10000, "Key space size")
+	keys       = flag.Int("keys", 100000, "Key space size")
 	cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
 	operation  = flag.String("op", "both", "operation to benchmark: set, get, or both")
+	sequential = flag.Bool("sequential", false, "Sequential key access (vs random)")
 )
 
 // Benchmarker defines the interface for benchmarking different cache backends
@@ -141,9 +142,9 @@ func main() {
 
 	clientFactory := func() Benchmarker {
 		switch *protocol {
-		case "memcache":
+		case "memc-txt":
 			return NewMemcacheClient(*host)
-		case "binary":
+		case "memc-bin":
 			return NewBinaryMemcacheClient(*host)
 		case "redis":
 			return NewRedisClient(*host)
@@ -156,10 +157,15 @@ func main() {
 	// SET Benchmark
 	if *operation == "set" || *operation == "both" {
 		start := time.Now()
-		runBenchmark("SET", clientFactory, func(b Benchmarker) error {
-			k := keyParams[rand.Intn(*keys)]
-			return b.Set(k, val)
-		})
+		if *sequential {
+			runBenchmarkSequential("SET", clientFactory, keyParams, func(b Benchmarker, key string) error {
+				return b.Set(key, val)
+			})
+		} else {
+			runBenchmarkRandom("SET", clientFactory, keyParams, func(b Benchmarker, key string) error {
+				return b.Set(key, val)
+			})
+		}
 		elapsed := time.Since(start)
 		printResults("SET", elapsed)
 	}
@@ -167,10 +173,15 @@ func main() {
 	// GET Benchmark
 	if *operation == "get" || *operation == "both" {
 		start := time.Now()
-		runBenchmark("GET", clientFactory, func(b Benchmarker) error {
-			k := keyParams[rand.Intn(*keys)]
-			return b.Get(k)
-		})
+		if *sequential {
+			runBenchmarkSequential("GET", clientFactory, keyParams, func(b Benchmarker, key string) error {
+				return b.Get(key)
+			})
+		} else {
+			runBenchmarkRandom("GET", clientFactory, keyParams, func(b Benchmarker, key string) error {
+				return b.Get(key)
+			})
+		}
 		elapsed := time.Since(start)
 		printResults("GET", elapsed)
 	}
@@ -293,18 +304,19 @@ func (c *BinaryMemcacheClient) Get(key string) error {
 	}
 
 	status := uint16(respHeader[6])<<8 | uint16(respHeader[7])
-	if status != 0 {
-		return fmt.Errorf("memcache error status: %d", status)
-	}
 
+	// Always consume body even on error (prevents protocol desync)
 	bodyLen := uint32(respHeader[8])<<24 | uint32(respHeader[9])<<16 | uint32(respHeader[10])<<8 | uint32(respHeader[11])
 	if bodyLen > 0 {
-		// Read body (Extras + Key + Value)
-		// We don't parse it, just consume it
 		trash := make([]byte, bodyLen)
 		if _, err := io.ReadFull(c.reader, trash); err != nil {
 			return err
 		}
+	}
+
+	// Key not found (0x0001) is acceptable for GET benchmark
+	if status != 0 && status != 1 {
+		return fmt.Errorf("memcache error status: %d", status)
 	}
 
 	return nil
@@ -314,9 +326,32 @@ func (c *BinaryMemcacheClient) Close() error {
 	return c.conn.Close()
 }
 
-func runBenchmark(name string, factory func() Benchmarker, op func(Benchmarker) error) {
+func runBenchmarkSequential(name string, factory func() Benchmarker, keyParams []string, op func(Benchmarker, string) error) {
 	var wg sync.WaitGroup
 	requestsPerClient := *requests / *clients
+	numKeys := len(keyParams)
+
+	for i := 0; i < *clients; i++ {
+		wg.Add(1)
+		startIdx := i * requestsPerClient
+		go func(start int) {
+			defer wg.Done()
+			client := factory()
+			defer client.Close()
+
+			for j := 0; j < requestsPerClient; j++ {
+				keyIdx := (start + j) % numKeys
+				_ = op(client, keyParams[keyIdx])
+			}
+		}(startIdx)
+	}
+	wg.Wait()
+}
+
+func runBenchmarkRandom(name string, factory func() Benchmarker, keyParams []string, op func(Benchmarker, string) error) {
+	var wg sync.WaitGroup
+	requestsPerClient := *requests / *clients
+	numKeys := len(keyParams)
 
 	for i := 0; i < *clients; i++ {
 		wg.Add(1)
@@ -326,7 +361,7 @@ func runBenchmark(name string, factory func() Benchmarker, op func(Benchmarker) 
 			defer client.Close()
 
 			for j := 0; j < requestsPerClient; j++ {
-				_ = op(client) // Ignoring errors for raw throughput
+				_ = op(client, keyParams[rand.Intn(numKeys)])
 			}
 		}()
 	}

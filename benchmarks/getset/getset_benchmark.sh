@@ -126,7 +126,7 @@ run_benchmark_set() {
     SYNC_INTERVAL=$2
     REDIS_FLAGS=$3
     ENABLE_MEMCACHED=$4
-    REQ_COUNT=${5:-$REQUESTS}  # Use 5th param or default to REQUESTS
+    REQ_COUNT=$5
     SHARD_COUNT=$6
 
     echo "==========================================================="
@@ -182,21 +182,21 @@ CONF
     # # TQCache Text Protocol
     # echo "Benchmarking TQCache..."
     # start_monitor $TQ_PID
-    # ./benchmark-tool -host localhost:11221 -protocol memcache -label "TQCache" -mode "$SYNC_MODE" -clients $CLIENTS -requests $REQ_COUNT -size $SIZE -keys $KEYS -csv > results.tmp
+    # ./benchmark-tool -host localhost:11221 -protocol memc-txt -label "TQCache" -mode "$SYNC_MODE" -clients $CLIENTS -size $SIZE -requests $REQ_COUNT -csv > results.tmp
     # STATS=$(stop_monitor $TQ_PID)
     # awk -v stats="$STATS" '{print $0 "," stats}' results.tmp >> $OUTPUT
 
     # TQCache Binary Protocol
     echo "Benchmarking TQCache..."
     start_monitor $TQ_PID
-    ./benchmark-tool -host localhost:11221 -protocol binary -label "TQCache" -mode "$SYNC_MODE" -clients $CLIENTS -requests $REQ_COUNT -size $SIZE -keys $KEYS -csv > results.tmp
+    ./benchmark-tool -host localhost:11221 -protocol memc-bin -label "TQCache" -mode "$SYNC_MODE" -clients $CLIENTS -size $SIZE -requests $REQ_COUNT -csv > results.tmp
     STATS=$(stop_monitor $TQ_PID)
     awk -v stats="$STATS" '{print $0 "," stats}' results.tmp >> $OUTPUT
 
     # Redis
     echo "Benchmarking Redis..."
     start_monitor $REDIS_PID
-    ./benchmark-tool -host localhost:6380 -protocol redis -label "Redis" -mode "$SYNC_MODE" -clients $CLIENTS -requests $REQ_COUNT -size $SIZE -keys $KEYS -csv > results.tmp
+    ./benchmark-tool -host localhost:6380 -protocol redis -label "Redis" -mode "$SYNC_MODE" -clients $CLIENTS -size $SIZE -requests $REQ_COUNT -csv > results.tmp
     STATS=$(stop_monitor $REDIS_PID)
     awk -v stats="$STATS" '{print $0 "," stats}' results.tmp >> $OUTPUT
 
@@ -204,7 +204,7 @@ CONF
     if [ "$ENABLE_MEMCACHED" = "true" ]; then
         echo "Benchmarking Memcached..."
         start_monitor $MEM_PID
-        ./benchmark-tool -host localhost:11222 -protocol memcache -label "Memcached" -mode "$SYNC_MODE" -clients $CLIENTS -requests $REQ_COUNT -size $SIZE -keys $KEYS -csv > results.tmp
+        ./benchmark-tool -host localhost:11222 -protocol memc-bin -label "Memcached" -mode "$SYNC_MODE" -clients $CLIENTS -size $SIZE -requests $REQ_COUNT -csv > results.tmp
         STATS=$(stop_monitor $MEM_PID)
         awk -v stats="$STATS" '{print $0 "," stats}' results.tmp >> $OUTPUT
     fi
