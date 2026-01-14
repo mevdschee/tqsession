@@ -10,7 +10,7 @@ session storage that survives restarts.
 - **Persistent Storage**: Data stored on disk, survives server restarts
 - **Efficient Storage**: About 25-33% waste space on disk on average
 - **Faster than Redis**: More than 50% faster than Redis in typical cases
-- **Memcached Compatible**: Supports all Memcached commands, including binary
+- **Memcached Compatible**: Supports all Memcached commands, text and binary
 - **TTL Enforcement**: Maximum TTL defaults to 24 hours (set to 0 to disable)
 - **No Eviction**: No LRU eviction support; Use max-ttl to limit diskspace usage
 
