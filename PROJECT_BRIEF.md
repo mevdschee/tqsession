@@ -75,24 +75,24 @@ Each record is exactly **1051 bytes** at offset `keyId * 1051`:
 
 #### Data File Format (`data`)
 
-Create 16 data files each holding a different size bucket. Start at 1024 bytes
-and double the size for each file.
+Create 16 data files each holding a different size bucket. Bucket size starts 
+at 1024 bytes and double the size for each file.
 
 ```
-┌──────────┬────────────────────┬─────────────────────┐
-│  length  │        data        │        unused       │
-│ 4 bytes  │   [length] bytes   │ [bucketSize-length] │
-└──────────┴────────────────────┴─────────────────────┘
+┌──────────┬────────────────────┐
+│  length  │        data        │
+│ 4 bytes  │ [bucketSize] bytes │
+└──────────┴────────────────────┘
 ```
 
-| Field    | Size              | Description                           |
-| -------- | ----------------- | ------------------------------------- |
-| `length` | 4 bytes           | Data length (uint32), max bucket size |
-| `data`   | length            | Raw value bytes                       |
-| `unused` | bucketSize-length | Unused slot space                     |
+| Field    | Size             | Description                   |
+| -------- | ---------------- | ----------------------------- |
+| `length` | 4 bytes          | Actual data length (uint32)   |
+| `data`   | bucketSize bytes | Raw value bytes, null padded  |
 
-**Slot sizes**: Total slot = `4 + bucket_size` bytes. Buckets: 1KB, 2KB, 4KB, ...,
-64MB.
+**Bucket sizes**: 1KB, 2KB, 4KB, ..., 64MB.
+
+**Slot sizes**: Total slot = `4 + bucketSize` bytes.
 
 ---
 
