@@ -19,7 +19,7 @@ func main() {
 	defaults := tqcache.DefaultConfig()
 
 	configFile := flag.String("config", "", "Path to config file (INI format)")
-	listen := flag.String("listen", ":11211", "Address to listen on ([host]:port)")
+	listen := flag.String("listen", ":11211", "Address to listen on ([address]:port)")
 	dataDir := flag.String("data-dir", defaults.DataDir, "Directory for data files")
 	shards := flag.Int("shards", tqcache.DefaultShardCount, "Number of shards for parallel access")
 	defaultTTL := flag.Duration("default-ttl", defaults.DefaultTTL, "Default TTL for keys without explicit expiry (0 = no expiry)")
