@@ -18,12 +18,12 @@ Maurits van der Schee
 
 # Concurrency Model
 
-| Component        | Description                              |
-| ---------------- | ---------------------------------------- |
-| **ShardedCache** | Routes keys to shards via FNV-1a hash    |
-| **Worker**       | Single goroutine per shard               |
-| **Storage**      | Per-shard files (no locks needed)        |
-| **Sync Worker**  | Periodic fsync across all shards         |
+| Component        | Description                           |
+| ---------------- | ------------------------------------- |
+| **ShardedCache** | Routes keys to shards via FNV-1a hash |
+| **Worker**       | Single goroutine per shard            |
+| **Storage**      | Per-shard files (no locks needed)     |
+| **Sync Worker**  | Periodic fsync across all shards      |
 
 ---
 
@@ -121,15 +121,15 @@ data/
 
 1. **B-Tree Index**: Fast key to keyId lookup, stores:
 
-  `{ key, keyId, bucket, slotIdx, length, expiry, cas }`
+`{ key, keyId, bucket, slotIdx, length, expiry, cas }`
 
 2. **Expiry Min-Heap**: TTL invalidation without scanning
 
-| Operation       | Complexity | Description                      |
-| --------------- | ---------- | -------------------------------- |
-| `PeekMin()`     | O(1)       | Check if root is expired         |
-| `Insert()`      | O(log n)   | Add new item with TTL            |
-| `Remove(keyId)` | O(log n)   | Remove by keyId                  |
+| Operation       | Complexity | Description              |
+| --------------- | ---------- | ------------------------ |
+| `PeekMin()`     | O(1)       | Check if root is expired |
+| `Insert()`      | O(log n)   | Add new item with TTL    |
+| `Remove(keyId)` | O(log n)   | Remove by keyId          |
 
 ---
 
@@ -148,7 +148,7 @@ data/
 - **SET**: +49% faster than Redis (~92k vs ~62k RPS)
 - **GET**: +64% faster than Redis (~176k vs ~107k RPS)
 - **Memory**: ~17x less than Redis (~70MB vs ~1207MB)
-- **Uses OS disk cache** instead of in-process memory
+- **CPU**: ~4x more CPU than Redis (~4 vs ~1 core)
 
 ---
 
@@ -168,7 +168,7 @@ Use `max-ttl` to limit diskspace usage.
 # Configuration Options
 
 | Parameter       | Default    | Description                       |
-| --------------- | ---------- | ----------------------------------|
+| --------------- | ---------- | --------------------------------- |
 | `listen`        | `:11211`   | Address to listen on              |
 | `data-dir`      | `data`     | Persistent data directory         |
 | `shards`        | `16`       | Number of shards                  |
