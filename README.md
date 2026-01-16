@@ -82,7 +82,7 @@ Benchmarks were run on a local development environment (Linux, Loopback).
 - **Write (SET)**: +49% faster than Redis (~92k RPS vs ~62k RPS) when writing
   with Periodic Sync.
 - **Read (GET)**: +64% faster than Redis (~176k RPS vs ~107k RPS) when reading.
-- **Memory**: reserves ~19x less memory than Redis (~70MB vs ~1339MB),
+- **Memory**: reserves ~19x less memory than Redis (~70MB vs ~1207MB),
   uses OS disk cache.
 - **CPU**: uses ~4x more CPU than Redis (~4 vs ~1 core) as Redis is
   single threaded.
@@ -92,7 +92,7 @@ Benchmarks were run on a local development environment (Linux, Loopback).
 | Reference              | SET (RPS) | GET (RPS) | Memory (MB) | CPU Usage |
 | :--------------------- | :-------- | :-------- | :---------- | :-------- |
 | **Memcached** (Memory) | ~126k     | ~275k     | ~1073MB     | ~2.5 core |
-| **Redis** (Periodic)   | ~62k      | ~107k     | ~1339MB     | ~1 core   |
+| **Redis** (Periodic)   | ~62k      | ~107k     | ~1207MB     | ~1 core   |
 | **TQCache** (Periodic) | ~92k      | ~176k     | ~70MB       | ~4 core   |
 
 NB: The maximum amount of cores used can be calculated as: shards / 4
