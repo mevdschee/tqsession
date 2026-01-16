@@ -14,40 +14,7 @@ Maurits van der Schee
 - No LRU eviction support. Not intended as a cache.
 - Ideal for (PHP) session storage
 
----
-
-# Concurrency Model
-
-| Component        | Description                           |
-| ---------------- | ------------------------------------- |
-| **ShardedCache** | Routes keys to shards via FNV-1a hash |
-| **Worker**       | Single goroutine per shard            |
-| **Storage**      | Per-shard files (no locks needed)     |
-| **Sync Worker**  | Periodic fsync across all shards      |
-
----
-
-# Request Flow: Incoming
-
-1. **TCP Client** connects to server
-2. **Server.Start** accepts connection, spawns goroutine
-3. **handleConnection** peeks first byte to detect protocol
-4. **Binary (0x80) or Text** protocol parses the command
-5. **ShardedCache** uses FNV-1a hash to determine shard index
-6. **Request** sent to the buffered channel of the Shard Worker
-
----
-
-# Request Flow: Shard Worker
-
-1. **Worker.run()** receives from channel (or expiry ticker)
-2. **handleRequest()** routes to handleGet/handleSet/etc.
-3. **Index** (B-Tree) looks up key to find keyId
-4. **Storage** reads/writes key metadata from keys file
-5. **Storage** reads/writes value data from data file
-6. **Min-Heap** insert on SET (if TTL), pop on expiry tick
-7. **Sync Worker** notify periodically to fsync files to disk
-8. **Response** sent back through response channel
+3k lines of Go code: CLI server or Go package
 
 ---
 
@@ -133,6 +100,41 @@ data/
 
 ---
 
+# Concurrency Model
+
+| Component        | Description                           |
+| ---------------- | ------------------------------------- |
+| **ShardedCache** | Routes keys to shards via FNV-1a hash |
+| **Worker**       | Single goroutine per shard            |
+| **Storage**      | Per-shard files (no locks needed)     |
+| **Sync Worker**  | Periodic fsync across all shards      |
+
+---
+
+# Request Flow: Incoming
+
+1. **TCP Client** connects to server
+2. **Server.Start** accepts connection, spawns goroutine
+3. **handleConnection** peeks first byte to detect protocol
+4. **Binary (0x80) or Text** protocol parses the command
+5. **ShardedCache** uses FNV-1a hash to determine shard index
+6. **Request** sent to the buffered channel of the Shard Worker
+
+---
+
+# Request Flow: Shard Worker
+
+1. **Worker.run()** receives from channel (or expiry ticker)
+2. **handleRequest()** routes to handleGet/handleSet/etc.
+3. **Index** (B-Tree) looks up key to find keyId
+4. **Storage** reads/writes key metadata from keys file
+5. **Storage** reads/writes value data from data file
+6. **Min-Heap** insert on SET (if TTL), pop on expiry tick
+7. **Sync Worker** notify periodically to fsync files to disk
+8. **Response** sent back through response channel
+
+---
+
 # Performance Comparison
 
 | Reference              | SET (RPS) | GET (RPS) | Memory (MB) | CPU Usage |
@@ -140,10 +142,6 @@ data/
 | **Memcached** (Memory) | ~126k     | ~275k     | ~1073MB     | ~2.5 core |
 | **Redis** (Periodic)   | ~62k      | ~107k     | ~1207MB     | ~1 core   |
 | **TQCache** (Periodic) | ~92k      | ~176k     | ~70MB       | ~4 core   |
-
----
-
-# Performance Highlights
 
 - **SET**: +49% faster than Redis (~92k vs ~62k RPS)
 - **GET**: +64% faster than Redis (~176k vs ~107k RPS)
@@ -198,7 +196,7 @@ Use `max-ttl` to limit diskspace usage.
 
 ---
 
-# Thank You
+# Questions?
 
 **Repository:** github.com/mevdschee/tqcache
 
