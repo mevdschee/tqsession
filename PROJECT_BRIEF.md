@@ -85,10 +85,10 @@ at 1024 bytes and double the size for each file.
 └──────────┴────────────────────┘
 ```
 
-| Field    | Size             | Description                   |
-| -------- | ---------------- | ----------------------------- |
-| `length` | 4 bytes          | Actual data length (uint32)   |
-| `data`   | bucketSize bytes | Raw value bytes, null padded  |
+| Field    | Size             | Description                         |
+| -------- | ---------------- | ----------------------------------- |
+| `length` | 4 bytes          | Actual data length (uint32, 0-64MB) |
+| `data`   | bucketSize bytes | Raw value bytes, null padded        |
 
 **Bucket sizes**: 1KB, 2KB, 4KB, ..., 64MB.
 
@@ -103,7 +103,7 @@ at 1024 bytes and double the size for each file.
 - **In-memory only**: Built on startup by scanning `keys` file
 - **Lookup**: key string → keyId (record index)
 - **Stores**:
-  `{ key, keyId, dataOffset, dataLength, expiry, cas, lastAccessed }`
+  `{ key, keyId, bucket, slotIdx, length, expiry, cas }`
 
 #### 2. Expiry Min-Heap (TTL Invalidation Without Scanning)
 
@@ -116,14 +116,13 @@ at 1024 bytes and double the size for each file.
 | Operation       | Complexity | Description                      |
 | --------------- | ---------- | -------------------------------- |
 | `PeekMin()`     | O(1)       | Check if root is expired         |
-| `PopExpired()`  | O(log n)   | Remove expired item, reheap      |
 | `Insert()`      | O(log n)   | Add new item with TTL            |
 | `Remove(keyId)` | O(log n)   | Remove by keyId (with index map) |
 
 **Invalidation Flow** (no scanning required):
 
-1. Background goroutine calls `PeekMin()`
-2. If `root.expiry <= now`: pop, compact file slots via continuous defrag
+1. Background ticker calls `PeekMin()` every 100ms
+2. If `root.expiry <= now`: call `Remove(keyId)`, compact file slots
 3. Repeat until root is not expired or heap is empty
 
 #### 3. Continuous Defragmentation (Always Compact Files)

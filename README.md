@@ -45,7 +45,7 @@ tqcache [options]
 | Flag             | Default    | Description                                                       |
 | ---------------- | ---------- | ----------------------------------------------------------------- |
 | `-config`        |            | Path to [config file](cmd/tqcache/tqcache.conf) (overrides flags) |
-| `-listen`        | `:11211`   | Address to listen on (`[address]:port`)                              |
+| `-listen`        | `:11211`   | Address to listen on (`[address]:port`)                           |
 | `-data-dir`      | `data`     | Directory for persistent data files                               |
 | `-shards`        | `16`       | Number of shards for parallel processing                          |
 | `-default-ttl`   | `0`        | Default TTL for keys (`0` = no expiry)                            |

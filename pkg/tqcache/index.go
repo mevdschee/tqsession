@@ -98,16 +98,6 @@ func (h *ExpiryHeap) Remove(keyId int64) {
 	}
 }
 
-// PopExpired removes and returns expired entries
-func (h *ExpiryHeap) PopExpired(now int64) []*ExpiryEntry {
-	var expired []*ExpiryEntry
-	for len(h.entries) > 0 && h.entries[0].Expiry <= now && h.entries[0].Expiry > 0 {
-		entry := heap.Pop(h).(*ExpiryEntry)
-		expired = append(expired, entry)
-	}
-	return expired
-}
-
 // Index holds all in-memory data structures
 type Index struct {
 	btree      *btree.BTree
@@ -186,11 +176,6 @@ func (idx *Index) GetByKeyId(keyId int64) *IndexEntry {
 // Count returns the number of entries
 func (idx *Index) Count() int {
 	return idx.btree.Len()
-}
-
-// GetExpired returns entries that have expired
-func (idx *Index) GetExpired(now int64) []*ExpiryEntry {
-	return idx.expiryHeap.PopExpired(now)
 }
 
 // GetByBucketSlot retrieves an entry by bucket and slot index
