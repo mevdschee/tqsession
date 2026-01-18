@@ -9,6 +9,14 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/mevdschee/tqcache/pkg/tqcache"
+)
+
+const (
+	maxKeyLength  = 250         // Memcached max key size
+	maxLineLength = 2 * 1024    // Max command line length before closing connection
+	maxValueSize  = 1024 * 1024 // Memcached default max item size (1MB)
 )
 
 func (s *Server) handleText(reader *bufio.Reader, writer *bufio.Writer) {
@@ -40,6 +48,10 @@ func (s *Server) handleText(reader *bufio.Reader, writer *bufio.Writer) {
 			s.handleTextStorage(reader, writer, parts, "ADD")
 		case "REPLACE":
 			s.handleTextStorage(reader, writer, parts, "REPLACE")
+		case "APPEND":
+			s.handleTextAppendPrepend(reader, writer, parts, false)
+		case "PREPEND":
+			s.handleTextAppendPrepend(reader, writer, parts, true)
 		case "CAS":
 			s.handleTextCas(reader, writer, parts)
 		case "GET":
@@ -54,8 +66,14 @@ func (s *Server) handleText(reader *bufio.Reader, writer *bufio.Writer) {
 			s.handleTextIncrDecr(writer, parts, false)
 		case "TOUCH":
 			s.handleTextTouch(writer, parts)
+		case "GAT":
+			s.handleTextGat(writer, parts, false)
+		case "GATS":
+			s.handleTextGat(writer, parts, true)
 		case "FLUSH_ALL":
 			s.handleTextFlushAll(writer, parts)
+		case "VERBOSITY":
+			// Silently accept verbosity command (noreply handled implicitly)
 		case "QUIT":
 			return
 		case "VERSION":
@@ -75,13 +93,39 @@ func (s *Server) handleText(reader *bufio.Reader, writer *bufio.Writer) {
 
 func (s *Server) handleTextStorage(reader *bufio.Reader, writer *bufio.Writer, parts []string, op string) {
 	if len(parts) < 5 {
-		writer.WriteString("CLIENT_ERROR bad data chunk\r\n")
+		writer.WriteString("CLIENT_ERROR bad command line format\r\n")
 		return
 	}
 
 	key := parts[1]
-	exptime, _ := strconv.ParseInt(parts[3], 10, 64)
-	bytes, _ := strconv.Atoi(parts[4])
+	// Validate flags (must be numeric)
+	_, err := strconv.ParseUint(parts[2], 10, 32)
+	if err != nil {
+		writer.WriteString("CLIENT_ERROR bad command line format\r\n")
+		return
+	}
+	// Validate exptime (must be numeric)
+	exptime, err := strconv.ParseInt(parts[3], 10, 64)
+	if err != nil {
+		writer.WriteString("CLIENT_ERROR bad command line format\r\n")
+		return
+	}
+	// Validate bytes (must be numeric)
+	bytes, err := strconv.Atoi(parts[4])
+	if err != nil {
+		writer.WriteString("CLIENT_ERROR bad command line format\r\n")
+		return
+	}
+	// Check value size limit (Memcached default is 1MB)
+	if bytes > maxValueSize {
+		// Still need to read and discard the data
+		discard := make([]byte, bytes)
+		io.ReadFull(reader, discard)
+		reader.ReadByte() // \r
+		reader.ReadByte() // \n
+		writer.WriteString("SERVER_ERROR object too large for cache\r\n")
+		return
+	}
 	noreply := len(parts) > 5 && parts[5] == "noreply"
 
 	// Read value
@@ -99,15 +143,22 @@ func (s *Server) handleTextStorage(reader *bufio.Reader, writer *bufio.Writer, p
 
 	// Calculate TTL
 	var ttl time.Duration
-	if exptime > 0 {
+	if exptime < 0 {
+		// Negative exptime means already expired
+		ttl = time.Nanosecond
+	} else if exptime > 0 {
 		if exptime > 2592000 {
+			// Unix timestamp
 			ttl = time.Until(time.Unix(exptime, 0))
+			if ttl <= 0 {
+				// Timestamp is in the past, already expired
+				ttl = time.Nanosecond
+			}
 		} else {
 			ttl = time.Duration(exptime) * time.Second
 		}
 	}
 
-	var err error
 	switch op {
 	case "SET":
 		_, err = s.cache.Set(key, value, ttl)
@@ -118,7 +169,7 @@ func (s *Server) handleTextStorage(reader *bufio.Reader, writer *bufio.Writer, p
 	}
 
 	if err != nil {
-		if err == os.ErrExist || err == os.ErrNotExist {
+		if err == tqcache.ErrKeyExists || err == tqcache.ErrKeyNotFound {
 			if !noreply {
 				writer.WriteString("NOT_STORED\r\n")
 			}
@@ -134,14 +185,49 @@ func (s *Server) handleTextStorage(reader *bufio.Reader, writer *bufio.Writer, p
 }
 
 func (s *Server) handleTextCas(reader *bufio.Reader, writer *bufio.Writer, parts []string) {
-	if len(parts) < 6 {
+	// Need at least 5 parts to parse bytes (key, flags, exptime, bytes)
+	if len(parts) < 5 {
 		writer.WriteString("CLIENT_ERROR bad command line format\r\n")
 		return
 	}
 
 	key := parts[1]
-	exptime, _ := strconv.ParseInt(parts[3], 10, 64)
-	bytes, _ := strconv.Atoi(parts[4])
+	// Validate flags (must be numeric)
+	_, err := strconv.ParseUint(parts[2], 10, 32)
+	if err != nil {
+		writer.WriteString("CLIENT_ERROR bad command line format\r\n")
+		return
+	}
+	// Validate exptime (must be numeric)
+	exptime, err := strconv.ParseInt(parts[3], 10, 64)
+	if err != nil {
+		writer.WriteString("CLIENT_ERROR bad command line format\r\n")
+		return
+	}
+	// Validate bytes (must be numeric)
+	bytes, err := strconv.Atoi(parts[4])
+	if err != nil {
+		writer.WriteString("CLIENT_ERROR bad command line format\r\n")
+		return
+	}
+
+	// Read value (must always consume the data to stay in sync)
+	value := make([]byte, bytes)
+	if _, err2 := io.ReadFull(reader, value); err2 != nil {
+		writer.WriteString("SERVER_ERROR read error\r\n")
+		return
+	}
+	// Read \r\n
+	c, _ := reader.ReadByte()
+	if c == '\r' {
+		reader.ReadByte()
+	}
+
+	// Now check if cas token is present and valid
+	if len(parts) < 6 {
+		writer.WriteString("CLIENT_ERROR bad command line format\r\n")
+		return
+	}
 	casToken, err := strconv.ParseUint(parts[5], 10, 64)
 	if err != nil {
 		writer.WriteString("CLIENT_ERROR bad command line format\r\n")
@@ -149,24 +235,19 @@ func (s *Server) handleTextCas(reader *bufio.Reader, writer *bufio.Writer, parts
 	}
 	noreply := len(parts) > 6 && parts[6] == "noreply"
 
-	// Read value
-	value := make([]byte, bytes)
-	if _, err := io.ReadFull(reader, value); err != nil {
-		writer.WriteString("SERVER_ERROR read error\r\n")
-		return
-	}
-
-	// Read \r\n
-	c, _ := reader.ReadByte()
-	if c == '\r' {
-		reader.ReadByte()
-	}
-
 	// Calculate TTL
 	var ttl time.Duration
-	if exptime > 0 {
+	if exptime < 0 {
+		// Negative exptime means already expired
+		ttl = time.Nanosecond
+	} else if exptime > 0 {
 		if exptime > 2592000 {
+			// Unix timestamp
 			ttl = time.Until(time.Unix(exptime, 0))
+			if ttl <= 0 {
+				// Timestamp is in the past, already expired
+				ttl = time.Nanosecond
+			}
 		} else {
 			ttl = time.Duration(exptime) * time.Second
 		}
@@ -174,13 +255,13 @@ func (s *Server) handleTextCas(reader *bufio.Reader, writer *bufio.Writer, parts
 
 	_, err = s.cache.Cas(key, value, ttl, casToken)
 	if err != nil {
-		if err == os.ErrExist {
+		if err == tqcache.ErrCasMismatch {
 			if !noreply {
 				writer.WriteString("EXISTS\r\n")
 			}
 			return
 		}
-		if err == os.ErrNotExist {
+		if err == tqcache.ErrKeyNotFound {
 			if !noreply {
 				writer.WriteString("NOT_FOUND\r\n")
 			}
@@ -262,7 +343,7 @@ func (s *Server) handleTextIncrDecr(writer *bufio.Writer, parts []string, incr b
 	}
 
 	if err != nil {
-		if err == os.ErrNotExist {
+		if err == tqcache.ErrKeyNotFound {
 			if !noreply {
 				writer.WriteString("NOT_FOUND\r\n")
 			}
@@ -288,9 +369,17 @@ func (s *Server) handleTextTouch(writer *bufio.Writer, parts []string) {
 	noreply := len(parts) > 3 && parts[3] == "noreply"
 
 	var ttl time.Duration
-	if exptime > 0 {
+	if exptime < 0 {
+		// Negative exptime means already expired
+		ttl = time.Nanosecond
+	} else if exptime > 0 {
 		if exptime > 2592000 {
+			// Unix timestamp
 			ttl = time.Until(time.Unix(exptime, 0))
+			if ttl <= 0 {
+				// Timestamp is in the past, already expired
+				ttl = time.Nanosecond
+			}
 		} else {
 			ttl = time.Duration(exptime) * time.Second
 		}
@@ -299,7 +388,7 @@ func (s *Server) handleTextTouch(writer *bufio.Writer, parts []string) {
 	_, err := s.cache.Touch(key, ttl)
 	if err != nil {
 		if !noreply {
-			if err == os.ErrNotExist {
+			if err == tqcache.ErrKeyNotFound {
 				writer.WriteString("NOT_FOUND\r\n")
 			} else {
 				writer.WriteString("SERVER_ERROR " + err.Error() + "\r\n")
@@ -313,6 +402,61 @@ func (s *Server) handleTextTouch(writer *bufio.Writer, parts []string) {
 	}
 }
 
+// handleTextGat handles GAT (get and touch) and GATS commands
+func (s *Server) handleTextGat(writer *bufio.Writer, parts []string, withCas bool) {
+	if len(parts) < 3 {
+		writer.WriteString("ERROR\r\n")
+		return
+	}
+
+	exptime, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		writer.WriteString("CLIENT_ERROR bad command line format\r\n")
+		return
+	}
+
+	// Calculate TTL
+	var ttl time.Duration
+	if exptime < 0 {
+		ttl = time.Nanosecond
+	} else if exptime > 0 {
+		if exptime > 2592000 {
+			ttl = time.Until(time.Unix(exptime, 0))
+			if ttl <= 0 {
+				ttl = time.Nanosecond
+			}
+		} else {
+			ttl = time.Duration(exptime) * time.Second
+		}
+	}
+
+	// Process each key
+	for _, key := range parts[2:] {
+		// Get the value first (before touching with potentially expired TTL)
+		value, cas, err := s.cache.Get(key)
+		if err != nil {
+			continue // Key not found, skip
+		}
+
+		// Now touch with new expiry
+		s.cache.Touch(key, ttl)
+
+		// Output the value
+		writer.WriteString("VALUE ")
+		writer.WriteString(key)
+		writer.WriteString(" 0 ")
+		writer.WriteString(strconv.Itoa(len(value)))
+		if withCas {
+			writer.WriteString(" ")
+			writer.WriteString(strconv.FormatUint(cas, 10))
+		}
+		writer.WriteString("\r\n")
+		writer.Write(value)
+		writer.WriteString("\r\n")
+	}
+	writer.WriteString("END\r\n")
+}
+
 func (s *Server) handleTextFlushAll(writer *bufio.Writer, parts []string) {
 	noreply := false
 	for _, p := range parts[1:] {
@@ -324,6 +468,58 @@ func (s *Server) handleTextFlushAll(writer *bufio.Writer, parts []string) {
 	s.cache.FlushAll()
 	if !noreply {
 		writer.WriteString("OK\r\n")
+	}
+}
+
+func (s *Server) handleTextAppendPrepend(reader *bufio.Reader, writer *bufio.Writer, parts []string, prepend bool) {
+	// append/prepend <key> <flags> <exptime> <bytes> [noreply]\r\n<data>\r\n
+	if len(parts) < 5 {
+		writer.WriteString("CLIENT_ERROR bad command line format\r\n")
+		return
+	}
+
+	key := parts[1]
+	// Validate bytes (must be numeric)
+	bytes, err := strconv.Atoi(parts[4])
+	if err != nil {
+		writer.WriteString("CLIENT_ERROR bad command line format\r\n")
+		return
+	}
+	noreply := len(parts) > 5 && parts[5] == "noreply"
+
+	// Read value
+	value := make([]byte, bytes)
+	if _, err := io.ReadFull(reader, value); err != nil {
+		writer.WriteString("SERVER_ERROR read error\r\n")
+		return
+	}
+
+	// Read \r\n
+	c, _ := reader.ReadByte()
+	if c == '\r' {
+		reader.ReadByte()
+	}
+
+	// Call cache append/prepend
+	if prepend {
+		_, err = s.cache.Prepend(key, value)
+	} else {
+		_, err = s.cache.Append(key, value)
+	}
+
+	if err != nil {
+		if err == tqcache.ErrKeyNotFound {
+			if !noreply {
+				writer.WriteString("NOT_STORED\r\n")
+			}
+			return
+		}
+		writer.WriteString("SERVER_ERROR " + err.Error() + "\r\n")
+		return
+	}
+
+	if !noreply {
+		writer.WriteString("STORED\r\n")
 	}
 }
 

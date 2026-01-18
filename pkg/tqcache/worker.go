@@ -554,11 +554,13 @@ func (w *Worker) doIncrDecr(key string, delta uint64, incr bool) *Response {
 		return &Response{Err: err}
 	}
 
-	// Parse as number
+	// Parse as number - must be all digits
 	var val uint64
 	for _, b := range data {
 		if b >= '0' && b <= '9' {
 			val = val*10 + uint64(b-'0')
+		} else {
+			return &Response{Err: ErrNotNumeric}
 		}
 	}
 
