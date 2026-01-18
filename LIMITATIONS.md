@@ -2,6 +2,8 @@
 
 This document describes the known limitations, test exclusions, and differences from Memcached behavior in TQCache.
 
+It uses the official memcached test suite from: https://github.com/memcached/memcached/tree/master/t
+
 ## Test Suite Results
 
 **Current Status:** 38,122 passed / 14 failed / 9 skipped (38,145 total tests, 99.96% pass rate)
