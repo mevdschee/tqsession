@@ -142,9 +142,3 @@ The following Memcached commands are not implemented:
 | `lru_crawler` | LRU crawler commands |
 | `debug` | Debug commands |
 
----
-
-## Thread Safety and LRU Eviction
-
-TQCache uses a sharded worker architecture. Each worker handles a subset of keys determined by FNV-1a hash, eliminating lock contention for most operations.
-It implements per worker LRU based eviction, determining the max memory usage per worker as a percentage of the total memory limit.
