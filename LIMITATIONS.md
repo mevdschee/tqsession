@@ -8,10 +8,10 @@ This document describes the known limitations, test exclusions, and differences 
 
 | Test File | Pass | Fail | Skip | Total | Status |
 |-----------|------|------|------|-------|--------|
-| cas.t | 38 | 0 | 4 | 42 | ✅ PASS |
-| incrdecr.t | 23 | 0 | 0 | 23 | ✅ PASS |
-| noreply.t | 9 | 0 | 0 | 9 | ✅ PASS |
-| touch.t | 4 | 0 | 0 | 4 | ✅ PASS |
+| cas.t | 38 | 0 | 4 | 42 | PASS |
+| incrdecr.t | 23 | 0 | 0 | 23 | PASS |
+| noreply.t | 9 | 0 | 0 | 9 | PASS |
+| touch.t | 4 | 0 | 0 | 4 | PASS |
 | getset.t | 37989 | 2 | 1 | 37992 | Partial |
 | expirations.t | 36 | 5 | 0 | 41 | Partial |
 | flush-all.t | 18 | 4 | 4 | 26 | Partial |
