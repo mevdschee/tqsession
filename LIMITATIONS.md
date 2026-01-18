@@ -4,18 +4,18 @@ This document describes the known limitations, test exclusions, and differences 
 
 ## Test Suite Results
 
-**Current Status:** 38,122 passed / 14 failed (99.96% pass rate)
+**Current Status:** 38,122 passed / 14 failed / 9 skipped (38,145 total tests, 99.96% pass rate)
 
-| Test File | Pass | Fail | Status |
-|-----------|------|------|--------|
-| cas.t | 38 | 0 | ✅ PASS |
-| incrdecr.t | 23 | 0 | ✅ PASS |
-| noreply.t | 9 | 0 | ✅ PASS |
-| touch.t | 4 | 0 | ✅ PASS |
-| getset.t | 37989 | 2 | Partial |
-| expirations.t | 36 | 5 | Partial |
-| flush-all.t | 18 | 4 | Partial |
-| flags.t | 5 | 3 | Partial |
+| Test File | Pass | Fail | Skip | Total | Status |
+|-----------|------|------|------|-------|--------|
+| cas.t | 38 | 0 | 4 | 42 | ✅ PASS |
+| incrdecr.t | 23 | 0 | 0 | 23 | ✅ PASS |
+| noreply.t | 9 | 0 | 0 | 9 | ✅ PASS |
+| touch.t | 4 | 0 | 0 | 4 | ✅ PASS |
+| getset.t | 37989 | 2 | 1 | 37992 | Partial |
+| expirations.t | 36 | 5 | 0 | 41 | Partial |
+| flush-all.t | 18 | 4 | 4 | 26 | Partial |
+| flags.t | 5 | 3 | 0 | 8 | Partial |
 
 ---
 
