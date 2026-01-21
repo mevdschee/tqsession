@@ -17,27 +17,22 @@ kill_port() {
 cleanup() {
     echo "Stopping servers..."
     if [ ! -z "$TQ_PID" ]; then kill $TQ_PID 2>/dev/null || true; fi
-    if [ ! -z "$MEM_PID" ]; then kill $MEM_PID 2>/dev/null || true; fi
     if [ ! -z "$REDIS_PID" ]; then kill $REDIS_PID 2>/dev/null || true; fi
     
     # Force cleanup ports
     kill_port 11221
     kill_port 6380
-    kill_port 11222
 
     rm -rf /tmp/tqcache-bench
+    rm -rf /tmp/tqcache-package-bench
     rm -rf /tmp/redis-bench
-    rm -f max_rss.tmp cpu_start.tmp cpu_time.tmp results.tmp
+    rm -f max_rss.tmp cpu_start.tmp cpu_time.tmp results.tmp time.tmp
     rm -f tqcache-server benchmark-tool
     rm -f redis_bench.log
 }
 trap cleanup EXIT
 
 # Check dependencies
-if ! command -v memcached &> /dev/null; then
-    echo "Error: memcached is not installed or not in PATH."
-    exit 1
-fi
 if ! command -v redis-server &> /dev/null; then
     echo "Error: redis-server is not installed or not in PATH."
     exit 1
@@ -125,9 +120,8 @@ run_benchmark_set() {
     SYNC_MODE=$1
     SYNC_INTERVAL=$2
     REDIS_FLAGS=$3
-    ENABLE_MEMCACHED=$4
-    REQ_COUNT=$5
-    SHARD_COUNT=$6
+    REQ_COUNT=$4
+    SHARD_COUNT=$5
 
     echo "==========================================================="
     echo "Running Benchmark Mode: $SYNC_MODE (requests: $REQ_COUNT, shards: $SHARD_COUNT)"
@@ -136,7 +130,6 @@ run_benchmark_set() {
     # Ensure ports are free
     kill_port 11221
     kill_port 6380
-    kill_port 11222
 
     # --- Start TQCache ---
     echo "Starting TQCache (Sync Mode: $SYNC_MODE, Interval: $SYNC_INTERVAL, Shards: $SHARD_COUNT)..."
@@ -166,62 +159,47 @@ CONF
     redis-server --port 6380 --dir /tmp/redis-bench --daemonize no --protected-mode no $REDIS_FLAGS > /dev/null 2>&1 &
     REDIS_PID=$!
 
-    # --- Start Memcached ---
-    MEM_PID=""
-    if [ "$ENABLE_MEMCACHED" = "true" ]; then
-        echo "Starting Memcached..."
-        memcached -p 11222 -m 2048 -u $(whoami) > /dev/null 2>&1 &
-        MEM_PID=$!
-    fi
-
     # Wait for startup
     sleep 3
 
     # --- Run Benchmarks ---
 
-    # # TQCache Text Protocol
-    # echo "Benchmarking TQCache..."
-    # start_monitor $TQ_PID
-    # ./benchmark-tool -host localhost:11221 -protocol memc-txt -label "TQCache" -mode "$SYNC_MODE" -clients $CLIENTS -size $SIZE -requests $REQ_COUNT -csv > results.tmp
-    # STATS=$(stop_monitor $TQ_PID)
-    # awk -v stats="$STATS" '{print $0 "," stats}' results.tmp >> $OUTPUT
-
-    # TQCache Binary Protocol
+    # TQCache Binary Protocol (via socket)
     echo "Benchmarking TQCache..."
     start_monitor $TQ_PID
-    ./benchmark-tool -host localhost:11221 -protocol memc-bin -label "TQCache" -mode "$SYNC_MODE" -clients $CLIENTS -size $SIZE -requests $REQ_COUNT -csv > results.tmp
+    ./benchmark-tool -host localhost:11221 -protocol memc-bin -label "TQCache" -mode "$SYNC_MODE" -shards $SHARD_COUNT -clients $CLIENTS -size $SIZE -requests $REQ_COUNT -csv > results.tmp
     STATS=$(stop_monitor $TQ_PID)
     awk -v stats="$STATS" '{print $0 "," stats}' results.tmp >> $OUTPUT
+
+    # TQCache Package (direct calls, no network)
+    # Use /usr/bin/time since process ends before we can read /proc stats
+    echo "Benchmarking TQCache (package)..."
+    rm -rf /tmp/tqcache-package-bench
+    mkdir -p /tmp/tqcache-package-bench
+    /usr/bin/time -f "%M %U %S %e" -o time.tmp ./benchmark-tool -protocol package -sync "$SYNC_MODE" -shards $SHARD_COUNT -datadir /tmp/tqcache-package-bench -label "TQCache (package)" -mode "$SYNC_MODE" -clients $CLIENTS -size $SIZE -requests $REQ_COUNT -csv > results.tmp
+    # Parse time output: maxrss(KB) user(s) sys(s) elapsed(s)
+    read MAX_KB USER_SEC SYS_SEC ELAPSED_SEC < time.tmp
+    MAX_MB=$((MAX_KB / 1024))
+    # CPU% = (user + sys) / elapsed * 100 using awk for precision
+    CPU_PCT=$(awk "BEGIN {printf \"%.0f\", ($USER_SEC + $SYS_SEC) / $ELAPSED_SEC * 100}")
+    awk -v mem="$MAX_MB" -v cpu="$CPU_PCT" '{print $0 "," mem "," cpu}' results.tmp >> $OUTPUT
 
     # Redis
     echo "Benchmarking Redis..."
     start_monitor $REDIS_PID
-    ./benchmark-tool -host localhost:6380 -protocol redis -label "Redis" -mode "$SYNC_MODE" -clients $CLIENTS -size $SIZE -requests $REQ_COUNT -csv > results.tmp
+    ./benchmark-tool -host localhost:6380 -protocol redis -label "Redis" -mode "$SYNC_MODE" -shards $SHARD_COUNT -clients $CLIENTS -size $SIZE -requests $REQ_COUNT -csv > results.tmp
     STATS=$(stop_monitor $REDIS_PID)
     awk -v stats="$STATS" '{print $0 "," stats}' results.tmp >> $OUTPUT
-
-    # Memcached
-    if [ "$ENABLE_MEMCACHED" = "true" ]; then
-        echo "Benchmarking Memcached..."
-        start_monitor $MEM_PID
-        ./benchmark-tool -host localhost:11222 -protocol memc-bin -label "Memcached" -mode "$SYNC_MODE" -clients $CLIENTS -size $SIZE -requests $REQ_COUNT -csv > results.tmp
-        STATS=$(stop_monitor $MEM_PID)
-        awk -v stats="$STATS" '{print $0 "," stats}' results.tmp >> $OUTPUT
-    fi
 
     # Cleanup processes for next round
     kill $TQ_PID 2>/dev/null || true
     kill $REDIS_PID 2>/dev/null || true
-    if [ ! -z "$MEM_PID" ]; then kill $MEM_PID 2>/dev/null || true; fi
     wait $TQ_PID 2>/dev/null || true
     wait $REDIS_PID 2>/dev/null || true
-    if [ ! -z "$MEM_PID" ]; then wait $MEM_PID 2>/dev/null || true; fi
 }
 
 generate_visualization() {
-    SHARD_COUNT=$1
-    CSV_FILE="getset_benchmark_${SHARD_COUNT}.csv"
-    PNG_FILE="getset_benchmark_${SHARD_COUNT}.png"
+    SYNC_MODE=$1
 
 python3 << EOF
 import pandas as pd
@@ -236,28 +214,34 @@ def annotate_bars(ax):
                         ha='center', va='bottom', fontsize=8, rotation=90, xytext=(0, 5), 
                         textcoords='offset points')
 
-# Load data
-df = pd.read_csv('${CSV_FILE}')
+# Load combined data
+df = pd.read_csv('getset_benchmark.csv')
 df.columns = [c.strip() for c in df.columns]
 for col in ['Mode', 'Backend', 'Protocol', 'Operation']:
     if col in df.columns:
         df[col] = df[col].astype(str).str.strip()
 
-# Prepare Data
-write_df = df[df['Operation'] == 'SET']
-write_pivot = write_df.pivot(index='Mode', columns='Backend', values='RPS')
-modes_order = ['none', 'periodic', 'always']
-existing_modes = [m for m in modes_order if m in write_pivot.index]
-write_pivot = write_pivot.reindex(existing_modes)
+# Filter to this sync mode
+mode_df = df[df['Mode'] == '${SYNC_MODE}']
 
-read_df = df[(df['Operation'] == 'GET') & (df['Mode'] == 'none')]
-read_pivot = read_df.pivot(index='Mode', columns='Backend', values='RPS')
+# Prepare Data with Shards on x-axis
+shard_order = [8, 16, 24, 32]
 
-mem_df = df[(df['Operation'] == 'SET') & (df['Mode'] == 'none')]
-mem_pivot = mem_df.pivot(index='Mode', columns='Backend', values='MaxMemory(MB)')
+write_df = mode_df[mode_df['Operation'] == 'SET']
+write_pivot = write_df.pivot(index='Shards', columns='Backend', values='RPS')
+write_pivot = write_pivot.reindex([s for s in shard_order if s in write_pivot.index])
 
-cpu_df = df[(df['Operation'] == 'SET') & (df['Mode'] == 'none')]
-cpu_pivot = cpu_df.pivot(index='Mode', columns='Backend', values='CPU(%)')
+read_df = mode_df[mode_df['Operation'] == 'GET']
+read_pivot = read_df.pivot(index='Shards', columns='Backend', values='RPS')
+read_pivot = read_pivot.reindex([s for s in shard_order if s in read_pivot.index])
+
+mem_df = mode_df[mode_df['Operation'] == 'SET']
+mem_pivot = mem_df.pivot(index='Shards', columns='Backend', values='MaxMemory(MB)')
+mem_pivot = mem_pivot.reindex([s for s in shard_order if s in mem_pivot.index])
+
+cpu_df = mode_df[mode_df['Operation'] == 'SET']
+cpu_pivot = cpu_df.pivot(index='Shards', columns='Backend', values='CPU(%)')
+cpu_pivot = cpu_pivot.reindex([s for s in shard_order if s in cpu_pivot.index])
 
 # Plotting - 2x2 grid
 fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(14, 10))
@@ -267,7 +251,7 @@ fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(14, 10))
 write_pivot.plot(kind='bar', ax=ax1, width=0.9, rot=0, legend=True)
 ax1.set_title('Write Performance (SET)')
 ax1.set_ylabel('Requests Per Second (RPS)')
-ax1.set_xlabel('Sync Mode')
+ax1.set_xlabel('Shard Count')
 ax1.grid(axis='y', linestyle='--', alpha=0.7)
 ax1.legend(title='Backend', loc='upper right')
 annotate_bars(ax1)
@@ -276,7 +260,7 @@ annotate_bars(ax1)
 read_pivot.plot(kind='bar', ax=ax2, width=0.9, rot=0, legend=False)
 ax2.set_title('Read Performance (GET)')
 ax2.set_ylabel('Requests Per Second (RPS)')
-ax2.set_xlabel('Sync Mode')
+ax2.set_xlabel('Shard Count')
 ax2.grid(axis='y', linestyle='--', alpha=0.7)
 annotate_bars(ax2)
 
@@ -285,7 +269,7 @@ annotate_bars(ax2)
 mem_pivot.plot(kind='bar', ax=ax3, width=0.9, rot=0, legend=False)
 ax3.set_title('Peak Memory Usage')
 ax3.set_ylabel('Megabytes (MB)')
-ax3.set_xlabel('Sync Mode')
+ax3.set_xlabel('Shard Count')
 ax3.grid(axis='y', linestyle='--', alpha=0.7)
 annotate_bars(ax3)
 
@@ -293,7 +277,7 @@ annotate_bars(ax3)
 cpu_pivot.plot(kind='bar', ax=ax4, width=0.9, rot=0, legend=False)
 ax4.set_title('CPU Usage')
 ax4.set_ylabel('CPU (%)')
-ax4.set_xlabel('Sync Mode')
+ax4.set_xlabel('Shard Count')
 ax4.grid(axis='y', linestyle='--', alpha=0.7)
 annotate_bars(ax4)
 
@@ -302,52 +286,60 @@ for ax in (ax1, ax2, ax3, ax4):
     ylim = ax.get_ylim()
     ax.set_ylim(0, ylim[1] * 1.15)
 
-plt.suptitle('TQCache Performance Benchmark (Shards: ${SHARD_COUNT})', fontsize=16)
+mode_title = '${SYNC_MODE}'.capitalize()
+plt.suptitle(f'TQCache Performance Benchmark - Sync Mode: {mode_title}', fontsize=16)
 plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-plt.savefig('${PNG_FILE}', dpi=150, bbox_inches='tight')
-print(f"Saved: ${PNG_FILE}")
+plt.savefig('getset_benchmark_${SYNC_MODE}.png', dpi=150, bbox_inches='tight')
+print(f"Saved: getset_benchmark_${SYNC_MODE}.png")
 EOF
 }
 
-# Main loop: run benchmarks for shards 4, 8, 12, 16, 24, 32
-for SHARD_COUNT in 4 8 12 16 24 32; do
+# Combined output file
+OUTPUT="getset_benchmark.csv"
+echo "Mode,Shards,Backend,Protocol,Operation,RPS,TimePerReq(ms),MaxMemory(MB),CPU(%)" > $OUTPUT
+
+# Main loop: run benchmarks for shards 8, 16, 24, 32
+for SHARD_COUNT in 8 16 24 32; do
     echo ""
     echo "###########################################################"
     echo "# BENCHMARKING WITH $SHARD_COUNT SHARD(S)"
     echo "###########################################################"
     echo ""
 
-    # Output file for this shard count
-    OUTPUT="getset_benchmark_${SHARD_COUNT}.csv"
-    echo "Mode,Backend,Protocol,Operation,RPS,TimePerReq(ms),MaxMemory(MB),CPU(%)" > $OUTPUT
-
     # 1. Mode: none
-    run_benchmark_set "none" "1s" "--save \"\" --appendonly no" "true" $REQUESTS $SHARD_COUNT
+    run_benchmark_set "none" "1s" "--save \"\" --appendonly no" $REQUESTS $SHARD_COUNT
 
     # 2. Mode: periodic (1s sync)  
-    run_benchmark_set "periodic" "1s" "--appendonly yes --appendfsync everysec" "false" $REQUESTS $SHARD_COUNT
+    run_benchmark_set "periodic" "1s" "--appendonly yes --appendfsync everysec" $REQUESTS $SHARD_COUNT
 
     # 3. Mode: always (fsync every write) - reduced requests for faster benchmark
-    run_benchmark_set "always" "1s" "--appendonly yes --appendfsync always" "false" 10000 $SHARD_COUNT
+    run_benchmark_set "always" "1s" "--appendonly yes --appendfsync always" 10000 $SHARD_COUNT
 
     echo "---------------------------------------------------"
-    echo "Benchmark completed for $SHARD_COUNT shard(s). Results saved to $OUTPUT"
+    echo "Benchmark completed for $SHARD_COUNT shard(s)."
     echo "---------------------------------------------------"
-    column -s, -t $OUTPUT
+done
 
-    # Generate PNG
-    echo ""
-    echo "Generating visualization for $SHARD_COUNT shard(s)..."
-    generate_visualization $SHARD_COUNT
+# Display combined results
+echo ""
+echo "Combined Results:"
+column -s, -t $OUTPUT
+
+# Generate PNG for each sync mode
+echo ""
+echo "Generating visualizations per sync mode..."
+for SYNC_MODE in none periodic always; do
+    echo "Generating graph for sync mode: $SYNC_MODE"
+    generate_visualization $SYNC_MODE
 done
 
 echo ""
 echo "============================================="
 echo "All benchmarks completed!"
 echo "Generated files:"
-for i in 1 2 4 8; do
-    echo "  - getset_benchmark_${i}.csv"
-    echo "  - getset_benchmark_${i}.png"
+echo "  - getset_benchmark.csv"
+for mode in none periodic always; do
+    echo "  - getset_benchmark_${mode}.png"
 done
 echo "============================================="
 echo "Done!"

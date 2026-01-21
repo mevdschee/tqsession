@@ -15,15 +15,19 @@ import (
 	"time"
 
 	"github.com/bradfitz/gomemcache/memcache"
+	"github.com/mevdschee/tqcache/pkg/tqcache"
 	"github.com/redis/go-redis/v9"
 )
 
 var (
 	host       = flag.String("host", "localhost:11211", "Host to benchmark")
-	protocol   = flag.String("protocol", "memc-txt", "Protocol: memc-txt, memc-bin, or redis")
+	protocol   = flag.String("protocol", "memc-txt", "Protocol: memc-txt, memc-bin, redis, or package")
 	csvOutput  = flag.Bool("csv", false, "Output results in CSV format")
 	label      = flag.String("label", "Target", "Label for the backend (used in CSV)")
 	mode       = flag.String("mode", "default", "Sync mode label (used in CSV)")
+	shards     = flag.Int("shards", 1, "Shard count (used in CSV and package protocol)")
+	syncMode   = flag.String("sync", "none", "Sync mode: none, periodic, always (package protocol only)")
+	dataDir    = flag.String("datadir", "/tmp/tqcache-package-bench", "Data directory (package protocol only)")
 	clients    = flag.Int("clients", 10, "Number of concurrent clients")
 	requests   = flag.Int("requests", 100000, "Total number of requests")
 	valueSize  = flag.Int("size", 1024, "Value size in bytes")
@@ -92,15 +96,71 @@ func (r *RedisClient) Close() error {
 	return r.client.Close()
 }
 
+// PackageClient implements Benchmarker using direct package calls (no network)
+type PackageClient struct {
+	cache *tqcache.ShardedCache
+}
+
+// Shared cache instance for package protocol
+var sharedCache *tqcache.ShardedCache
+var sharedCacheMu sync.Mutex
+
+func getSharedCache() *tqcache.ShardedCache {
+	sharedCacheMu.Lock()
+	defer sharedCacheMu.Unlock()
+	if sharedCache == nil {
+		cfg := tqcache.DefaultConfig()
+		cfg.DataDir = *dataDir
+		switch *syncMode {
+		case "none":
+			cfg.SyncStrategy = tqcache.SyncNone
+		case "periodic":
+			cfg.SyncStrategy = tqcache.SyncPeriodic
+		case "always":
+			cfg.SyncStrategy = tqcache.SyncAlways
+		}
+		var err error
+		sharedCache, err = tqcache.NewSharded(cfg, *shards)
+		if err != nil {
+			log.Fatalf("Failed to create cache: %v", err)
+		}
+	}
+	return sharedCache
+}
+
+func NewPackageClient() *PackageClient {
+	return &PackageClient{
+		cache: getSharedCache(),
+	}
+}
+
+func (p *PackageClient) Set(key string, value []byte) error {
+	_, err := p.cache.Set(key, value, 0)
+	return err
+}
+
+func (p *PackageClient) Get(key string) error {
+	_, _, err := p.cache.Get(key)
+	return err
+}
+
+func (p *PackageClient) Close() error {
+	// Don't close shared cache - it's reused across clients
+	return nil
+}
+
 func main() {
 	flag.Parse()
 
-	// Wait for server to come up (manual check)
-	conn, err := net.DialTimeout("tcp", *host, 2*time.Second)
-	if err != nil {
-		log.Fatalf("Cannot connect to %s: %v", *host, err)
+	// Skip connection check for package protocol
+	if *protocol != "package" {
+		// Wait for server to come up (manual check)
+		conn, err := net.DialTimeout("tcp", *host, 2*time.Second)
+		if err != nil {
+			log.Fatalf("Cannot connect to %s: %v", *host, err)
+		}
+		conn.Close()
 	}
-	conn.Close()
 
 	if *cpuprofile != "" {
 		f, err := os.Create(*cpuprofile)
@@ -125,21 +185,6 @@ func main() {
 	rand.Read(val)
 
 	// Factory function to create new clients based on protocol
-	// Note: For benchmarks, creating a new client per goroutine (or sharing one) depends on the driver.
-	// gomemcache is typically thread-safe but here we mimicked the original behavior of one client per routine.
-	// go-redis is also thread-safe and uses a pool.
-	// To strictly emulate "concurrent clients", creating separate instances is cleaner for isolation,
-	// but might just be multiple connections from one pool in go-redis case.
-	// For simplicity, we create a new "Benchmarker" wrapper per routine.
-
-	// Factory function to create new clients based on protocol
-	// Note: For benchmarks, creating a new client per goroutine (or sharing one) depends on the driver.
-	// gomemcache is typically thread-safe but here we mimicked the original behavior of one client per routine.
-	// go-redis is also thread-safe and uses a pool.
-	// To strictly emulate "concurrent clients", creating separate instances is cleaner for isolation,
-	// but might just be multiple connections from one pool in go-redis case.
-	// For simplicity, we create a new "Benchmarker" wrapper per routine.
-
 	clientFactory := func() Benchmarker {
 		switch *protocol {
 		case "memc-txt":
@@ -148,6 +193,8 @@ func main() {
 			return NewBinaryMemcacheClient(*host)
 		case "redis":
 			return NewRedisClient(*host)
+		case "package":
+			return NewPackageClient()
 		default:
 			log.Fatalf("Unknown protocol: %s", *protocol)
 			return nil
@@ -371,8 +418,8 @@ func runBenchmarkRandom(name string, factory func() Benchmarker, keyParams []str
 func printResults(op string, elapsed time.Duration) {
 	rps := float64(*requests) / elapsed.Seconds()
 	if *csvOutput {
-		// Mode,Backend,Protocol,Operation,RPS,TimePerReq(ms)
-		fmt.Printf("%s,%s,%s,%s,%.2f,%.4f\n", *mode, *label, *protocol, op, rps, elapsed.Seconds()*1000/float64(*requests))
+		// Mode,Shards,Backend,Protocol,Operation,RPS,TimePerReq(ms)
+		fmt.Printf("%s,%d,%s,%s,%s,%.2f,%.4f\n", *mode, *shards, *label, *protocol, op, rps, elapsed.Seconds()*1000/float64(*requests))
 	} else {
 		fmt.Printf("%-5s: %.2f req/sec (Time: %s)\n", op, rps, elapsed)
 	}
