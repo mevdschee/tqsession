@@ -68,34 +68,34 @@ NB: Set "max-ttl = 24h" to prevent disk space exhaustion.
 
 ## Performance
 
-**TQCache vs Redis vs Memcached**
+**TQCache vs Redis** (Periodic Sync Mode - Default Configuration)
 
 Benchmarks were run on a local development environment (Linux, Loopback).
 100,000 keys were used for the benchmark, each with a size of 10KB.
 
 ### Benchmark Results
 
-![Performance Benchmark](benchmarks/getset/getset_benchmark_16.png)
+![Performance Benchmark](benchmarks/getset/getset_benchmark_periodic.png)
 
-### Performance Highlights
+### Performance Highlights (16 shards)
 
-- **Write (SET)**: +49% faster than Redis (~92k RPS vs ~62k RPS) when writing
-  with Periodic Sync.
-- **Read (GET)**: +64% faster than Redis (~176k RPS vs ~107k RPS) when reading.
-- **Memory**: reserves ~17x less memory than Redis (~70MB vs ~1207MB),
-  uses OS disk cache.
-- **CPU**: uses ~4x more CPU than Redis (~4 vs ~1 core) as Redis is
-  single threaded.
+- **Write (SET)**: +60% faster than Redis (~96k RPS vs ~60k RPS) via socket,
+  or 3x faster (~180k RPS) using the package directly.
+- **Read (GET)**: +84% faster than Redis (~184k RPS vs ~100k RPS) via socket,
+  or 5x faster (~498k RPS) using the package directly.
+- **Memory**: Uses ~20x less memory than Redis (~70-83MB vs ~1372MB),
+  relies on OS disk cache.
+- **CPU**: Uses ~4 cores (shards/4) compared to Redis's single-threaded ~1 core.
 
 ### Summary Table
 
-| Reference              | SET (RPS) | GET (RPS) | Memory (MB) | CPU Usage |
-| :--------------------- | :-------- | :-------- | :---------- | :-------- |
-| **Memcached** (Memory) | ~126k     | ~275k     | ~1073MB     | ~2.5 core |
-| **Redis** (Periodic)   | ~62k      | ~107k     | ~1207MB     | ~1 core   |
-| **TQCache** (Periodic) | ~92k      | ~176k     | ~70MB       | ~4 core   |
+| Backend                  | SET (RPS) | GET (RPS) | Memory (MB) | CPU Usage  |
+| :----------------------- | :-------- | :-------- | :---------- | :--------- |
+| **TQCache** (socket)     | ~96k      | ~184k     | ~70MB       | ~4 cores   |
+| **TQCache** (package)    | ~180k     | ~498k     | ~83MB       | ~3.5 cores |
+| **Redis**                | ~60k      | ~100k     | ~1372MB     | ~1 core    |
 
-NB: The maximum amount of cores used can be calculated as: shards / 4
+NB: Package mode calls TQCache directly without network overhead.
 
 ## Testing
 
