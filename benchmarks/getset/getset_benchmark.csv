@@ -1,0 +1,73 @@
+Mode,Shards,Backend,Protocol,Operation,RPS,TimePerReq(ms),MaxMemory(MB),CPU(%)
+none,8,TQCache,memc-bin,SET,55834.03,0.0179,71,197
+none,8,TQCache,memc-bin,GET,110223.86,0.0091,71,197
+none,8,TQCache (package),package,SET,104830.36,0.0095,76,191
+none,8,TQCache (package),package,GET,278026.94,0.0036,76,191
+none,8,Redis,redis,SET,81448.32,0.0123,1207,98
+none,8,Redis,redis,GET,113088.29,0.0088,1207,98
+periodic,8,TQCache,memc-bin,SET,51075.26,0.0196,70,197
+periodic,8,TQCache,memc-bin,GET,109151.86,0.0092,70,197
+periodic,8,TQCache (package),package,SET,105589.09,0.0095,82,192
+periodic,8,TQCache (package),package,GET,275309.99,0.0036,82,192
+periodic,8,Redis,redis,SET,48558.42,0.0206,1258,104
+periodic,8,Redis,redis,GET,106709.35,0.0094,1258,104
+always,8,TQCache,memc-bin,SET,2981.09,0.3354,15,50
+always,8,TQCache,memc-bin,GET,105631.75,0.0095,15,50
+always,8,TQCache (package),package,SET,2968.47,0.3369,23,40
+always,8,TQCache (package),package,GET,293410.75,0.0034,23,40
+always,8,Redis,redis,SET,7118.71,0.1405,1207,25
+always,8,Redis,redis,GET,109571.14,0.0091,1207,25
+none,16,TQCache,memc-bin,SET,99719.99,0.0100,69,382
+none,16,TQCache,memc-bin,GET,172553.95,0.0058,69,382
+none,16,TQCache (package),package,SET,180171.24,0.0056,77,364
+none,16,TQCache (package),package,GET,499474.47,0.0020,77,364
+none,16,Redis,redis,SET,78188.71,0.0128,1207,99
+none,16,Redis,redis,GET,110531.19,0.0090,1207,99
+periodic,16,TQCache,memc-bin,SET,96259.48,0.0104,70,382
+periodic,16,TQCache,memc-bin,GET,184494.25,0.0054,70,382
+periodic,16,TQCache (package),package,SET,179697.83,0.0056,83,357
+periodic,16,TQCache (package),package,GET,497678.23,0.0020,83,357
+periodic,16,Redis,redis,SET,60341.45,0.0166,1372,104
+periodic,16,Redis,redis,GET,100489.76,0.0100,1372,104
+always,16,TQCache,memc-bin,SET,3357.05,0.2979,16,62
+always,16,TQCache,memc-bin,GET,145978.61,0.0069,16,62
+always,16,TQCache (package),package,SET,3561.26,0.2808,23,49
+always,16,TQCache (package),package,GET,441625.73,0.0023,23,49
+always,16,Redis,redis,SET,6619.91,0.1511,1207,25
+always,16,Redis,redis,GET,97863.48,0.0102,1207,25
+none,24,TQCache,memc-bin,SET,115526.65,0.0087,76,524
+none,24,TQCache,memc-bin,GET,194575.07,0.0051,76,524
+none,24,TQCache (package),package,SET,233016.95,0.0043,90,498
+none,24,TQCache (package),package,GET,661980.85,0.0015,90,498
+none,24,Redis,redis,SET,77538.67,0.0129,1207,98
+none,24,Redis,redis,GET,104815.27,0.0095,1207,98
+periodic,24,TQCache,memc-bin,SET,104118.00,0.0096,81,498
+periodic,24,TQCache,memc-bin,GET,176705.87,0.0057,81,498
+periodic,24,TQCache (package),package,SET,235958.95,0.0042,89,512
+periodic,24,TQCache (package),package,GET,676324.23,0.0015,89,512
+periodic,24,Redis,redis,SET,61644.15,0.0162,1334,103
+periodic,24,Redis,redis,GET,99386.71,0.0101,1334,103
+always,24,TQCache,memc-bin,SET,3471.17,0.2881,18,63
+always,24,TQCache,memc-bin,GET,170903.42,0.0059,18,63
+always,24,TQCache (package),package,SET,3769.19,0.2653,25,54
+always,24,TQCache (package),package,GET,476329.31,0.0021,25,54
+always,24,Redis,redis,SET,7018.86,0.1425,1208,25
+always,24,Redis,redis,GET,96843.78,0.0103,1208,25
+none,32,TQCache,memc-bin,SET,122877.98,0.0081,62,588
+none,32,TQCache,memc-bin,GET,168474.90,0.0059,62,588
+none,32,TQCache (package),package,SET,230813.08,0.0043,72,566
+none,32,TQCache (package),package,GET,713433.35,0.0014,72,566
+none,32,Redis,redis,SET,77062.49,0.0130,1207,98
+none,32,Redis,redis,GET,104346.10,0.0096,1207,98
+periodic,32,TQCache,memc-bin,SET,108952.45,0.0092,62,581
+periodic,32,TQCache,memc-bin,GET,169757.26,0.0059,62,581
+periodic,32,TQCache (package),package,SET,244538.82,0.0041,85,605
+periodic,32,TQCache (package),package,GET,692312.27,0.0014,85,605
+periodic,32,Redis,redis,SET,62218.97,0.0161,1336,105
+periodic,32,Redis,redis,GET,98318.28,0.0102,1336,105
+always,32,TQCache,memc-bin,SET,3536.52,0.2828,17,65
+always,32,TQCache,memc-bin,GET,155595.93,0.0064,17,65
+always,32,TQCache (package),package,SET,3871.25,0.2583,27,56
+always,32,TQCache (package),package,GET,573852.20,0.0017,27,56
+always,32,Redis,redis,SET,7007.67,0.1427,1208,25
+always,32,Redis,redis,GET,100888.75,0.0099,1208,25
