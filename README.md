@@ -91,9 +91,9 @@ Benchmarks were run on a local development environment (Linux, Loopback).
 
 | Backend                  | SET (RPS) | GET (RPS) | Memory (MB) | CPU Usage  |
 | :----------------------- | :-------- | :-------- | :---------- | :--------- |
+| **Redis**                | ~60k      | ~100k     | ~1372MB     | ~1 core    |
 | **TQCache** (socket)     | ~96k      | ~184k     | ~70MB       | ~4 cores   |
 | **TQCache** (package)    | ~180k     | ~498k     | ~83MB       | ~3.5 cores |
-| **Redis**                | ~60k      | ~100k     | ~1372MB     | ~1 core    |
 
 NB: Package mode calls TQCache directly without network overhead.
 
